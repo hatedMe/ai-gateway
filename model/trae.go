@@ -1,0 +1,42 @@
+package model
+
+type TraeRequest struct {
+	ConfigName     string        `json:"config_name"`
+	ConversationID string        `json:"conversation_id"`
+	Messages       []TraeMessage `json:"messages"`
+	ModelName      string        `json:"model_name"`
+	SessionID      string        `json:"session_id"`
+	Tools          []interface{} `json:"tools"`
+	UserInput      string        `json:"user_input"`
+}
+
+type TraeMessage struct {
+	Role    string        `json:"role"`
+	Content []TraeContent `json:"content"`
+}
+
+type TraeContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type TraeOutput struct {
+	Response         string      `json:"response"`
+	ReasoningContent string      `json:"reasoning_content"`
+	ToolCalls        interface{} `json:"tool_calls"`
+}
+
+type TraeTokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type TraeDone struct {
+	FinishReason string `json:"finish_reason"`
+}
+
+type TraeError struct {
+	Code  int    `json:"code"`
+	Error string `json:"error"`
+}
