@@ -12,6 +12,19 @@ type OpenAIMessage struct {
 	Content          interface{} `json:"content,omitempty"`
 	ReasoningContent interface{} `json:"reasoning_content,omitempty"`
 	ToolCalls        interface{} `json:"tool_calls,omitempty"`
+	ToolCallID       string      `json:"tool_call_id,omitempty"`
+}
+
+type OpenAIToolCall struct {
+	Index    int                     `json:"index"`
+	ID       string                  `json:"id"`
+	Type     string                  `json:"type"`
+	Function OpenAIToolCallFunction  `json:"function"`
+}
+
+type OpenAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type OpenAIResponse struct {

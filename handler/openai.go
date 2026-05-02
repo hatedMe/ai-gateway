@@ -45,7 +45,6 @@ func HandleChatCompletions(c *gin.Context) {
 		auth = c.GetHeader("X-Api-Key")
 	}
 	auth = strings.TrimPrefix(auth, "Bearer ")
-	fmt.Printf("[OpenAI] Auth value: %s\n", auth)
 	if auth == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization or X-Api-Key header is required"})
 		return
@@ -62,17 +61,21 @@ func HandleChatCompletions(c *gin.Context) {
 		return
 	}
 
+	reqJSON, _ := json.MarshalIndent(req, "", "  ")
+	timestamp := time.Now().Format("20060102_150405")
+	writeLog(fmt.Sprintf("openai_request_%s.json", timestamp), string(reqJSON))
+
 	traeMessages := make([]model.TraeMessage, len(req.Messages))
 	var userInput string
 	for i, msg := range req.Messages {
-		contentStr := service.ContentToString(msg.Content)
+		contentStr := service.OpenAIContentToString(msg.Content, msg.ToolCalls, msg.Role)
 		traeMessages[i] = model.TraeMessage{Role: msg.Role, Content: []model.TraeContent{{Type: "text", Text: contentStr}}}
 		if i == len(req.Messages)-1 && msg.Role == "user" {
 			userInput = contentStr
 		}
 	}
 
-	traePayload := service.BuildTraeRequest(traeMessages, req.Model, req.Tools, userInput)
+	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.FilterBlockedTools(req.Tools), userInput)
 
 	payloadJSON, _ := json.Marshal(traePayload)
 	fmt.Printf("[OpenAI] Sending to Trae: %s\n", string(payloadJSON))
@@ -94,16 +97,20 @@ func HandleChatCompletions(c *gin.Context) {
 
 	defer resp.RawBody().Close()
 	if req.Stream {
-		handleOpenAIStream(c, resp.RawBody(), req.Model)
+		handleOpenAIStream(c, resp.RawBody(), req.Model, timestamp)
 	} else {
-		handleOpenAINonStream(c, resp.RawBody(), req.Model)
+		handleOpenAINonStream(c, resp.RawBody(), req.Model, timestamp)
 	}
 }
 
-func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
+func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
+
+	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
+	var rawSSE strings.Builder
+
 	reader := bufio.NewReader(body)
 	var currentEvent string
 	c.Stream(func(w io.Writer) bool {
@@ -112,7 +119,55 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 			if err != io.EOF {
 				fmt.Printf("Stream read error: %v\n", err)
 			}
+
+			if len(toolCallsAcc) > 0 {
+				toolCalls := make([]model.OpenAIToolCall, 0)
+				for i := 0; i < len(toolCallsAcc); i++ {
+					if tc, ok := toolCallsAcc[i]; ok {
+						toolCalls = append(toolCalls, model.OpenAIToolCall{
+							Index: i,
+							ID:    tc.ID,
+							Type:  "function",
+							Function: model.OpenAIToolCallFunction{
+								Name:      tc.Name,
+								Arguments: tc.Arguments,
+							},
+						})
+					}
+				}
+				chunk := model.OpenAIChunk{
+					ID:      "chatcmpl-" + uuid.New().String(),
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   modelName,
+					Choices: []model.OpenAIChunkChoice{{
+						Index:        0,
+						Delta:        model.OpenAIDelta{ToolCalls: toolCalls},
+						FinishReason: nil,
+					}},
+				}
+				j, _ := json.Marshal(chunk)
+				w.Write([]byte("data: " + string(j) + "\n\n"))
+			}
+
+			finishChunk := model.OpenAIChunk{
+				ID:      "chatcmpl-" + uuid.New().String(),
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   modelName,
+				Choices: []model.OpenAIChunkChoice{{
+					Index:        0,
+					Delta:        model.OpenAIDelta{},
+					FinishReason: "stop",
+				}},
+			}
+			if len(toolCallsAcc) > 0 {
+				finishChunk.Choices[0].FinishReason = "tool_calls"
+			}
+			j, _ := json.Marshal(finishChunk)
+			w.Write([]byte("data: " + string(j) + "\n\n"))
 			w.Write([]byte("data: [DONE]\n\n"))
+			writeLog(fmt.Sprintf("openai_response_%s.log", timestamp), rawSSE.String())
 			return false
 		}
 
@@ -120,6 +175,8 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 		if line == "" {
 			return true
 		}
+
+		rawSSE.WriteString(line + "\n")
 
 		if strings.HasPrefix(line, "event:") {
 			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
@@ -142,18 +199,32 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 				j, _ := json.Marshal(errChunk)
 				w.Write([]byte("data: " + string(j) + "\n\n"))
 				w.Write([]byte("data: [DONE]\n\n"))
+				writeLog(fmt.Sprintf("openai_response_%s.log", timestamp), rawSSE.String())
 				return false
 			}
-
-			var chunk model.OpenAIChunk
-			chunk.ID = "chatcmpl-" + uuid.New().String()
-			chunk.Object = "chat.completion.chunk"
-			chunk.Created = time.Now().Unix()
-			chunk.Model = modelName
 
 			if currentEvent == "output" {
 				var out model.TraeOutput
 				json.Unmarshal([]byte(dataStr), &out)
+
+				if len(out.ToolCalls) > 0 {
+					for _, tc := range out.ToolCalls {
+						idx := tc.Index
+						if tc.ID != "" {
+							toolCallsAcc[idx] = &model.AccumulatedToolCall{
+								ID:        tc.ID,
+								Name:      tc.FunctionCall.Name,
+								Arguments: tc.FunctionCall.Arguments,
+							}
+						} else if existing, ok := toolCallsAcc[idx]; ok {
+							existing.Arguments += tc.FunctionCall.Arguments
+							if tc.FunctionCall.Name != "" {
+								existing.Name = tc.FunctionCall.Name
+							}
+						}
+					}
+				}
+
 				delta := model.OpenAIDelta{}
 				if out.Response != "" {
 					delta.Content = out.Response
@@ -161,32 +232,36 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 				if out.ReasoningContent != "" {
 					delta.ReasoningContent = out.ReasoningContent
 				}
-				if out.ToolCalls != nil {
-					delta.ToolCalls = out.ToolCalls
+				if delta.Content != nil || delta.ReasoningContent != nil {
+					chunk := model.OpenAIChunk{
+						ID:      "chatcmpl-" + uuid.New().String(),
+						Object:  "chat.completion.chunk",
+						Created: time.Now().Unix(),
+						Model:   modelName,
+						Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: delta}},
+					}
+					j, _ := json.Marshal(chunk)
+					w.Write([]byte("data: " + string(j) + "\n\n"))
 				}
-				chunk.Choices = []model.OpenAIChunkChoice{{Index: 0, Delta: delta}}
-				j, _ := json.Marshal(chunk)
-				w.Write([]byte("data: " + string(j) + "\n\n"))
 			} else if currentEvent == "done" {
-				var done model.TraeDone
-				json.Unmarshal([]byte(dataStr), &done)
-				chunk.Choices = []model.OpenAIChunkChoice{{Index: 0, Delta: model.OpenAIDelta{}, FinishReason: done.FinishReason}}
-				j, _ := json.Marshal(chunk)
-				w.Write([]byte("data: " + string(j) + "\n\n"))
+				// done handled at stream end
 			}
 		}
 		return true
 	})
 }
 
-func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string) {
+func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
 	var currentEvent string
 	var accumulatedResponse string
 	var accumulatedReasoning string
-	var accumulatedToolCalls interface{}
+	var toolCalls []model.TraeToolCall
+	var finishReason string
 	var usage model.OpenAIUsage
+	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, data string) bool {
+		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n", event, data))
 		currentEvent = event
 		switch currentEvent {
 		case "error":
@@ -205,23 +280,65 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 			json.Unmarshal([]byte(data), &out)
 			accumulatedResponse += out.Response
 			accumulatedReasoning += out.ReasoningContent
-			if out.ToolCalls != nil {
-				accumulatedToolCalls = out.ToolCalls
+			if len(out.ToolCalls) > 0 {
+				toolCalls = append(toolCalls, out.ToolCalls...)
 			}
 		case "token_usage":
 			var tu model.TraeTokenUsage
 			json.Unmarshal([]byte(data), &tu)
 			usage = model.OpenAIUsage{PromptTokens: tu.PromptTokens, CompletionTokens: tu.CompletionTokens, TotalTokens: tu.TotalTokens}
+		case "done":
+			var doneData model.TraeDone
+			json.Unmarshal([]byte(data), &doneData)
+			finishReason = doneData.FinishReason
 		}
 		return true
 	})
+
+	writeLog(fmt.Sprintf("openai_response_%s.log", timestamp), rawSSE.String())
+
+	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
+	for _, tc := range toolCalls {
+		idx := tc.Index
+		if tc.ID != "" {
+			toolCallsAcc[idx] = &model.AccumulatedToolCall{
+				ID:        tc.ID,
+				Name:      tc.FunctionCall.Name,
+				Arguments: tc.FunctionCall.Arguments,
+			}
+		} else if existing, ok := toolCallsAcc[idx]; ok {
+			existing.Arguments += tc.FunctionCall.Arguments
+			if tc.FunctionCall.Name != "" {
+				existing.Name = tc.FunctionCall.Name
+			}
+		}
+	}
 
 	message := model.OpenAIMessage{Role: "assistant", Content: accumulatedResponse}
 	if accumulatedReasoning != "" {
 		message.ReasoningContent = accumulatedReasoning
 	}
-	if accumulatedToolCalls != nil {
-		message.ToolCalls = accumulatedToolCalls
+	if len(toolCallsAcc) > 0 {
+		openaiToolCalls := make([]model.OpenAIToolCall, 0)
+		for i := 0; i < len(toolCallsAcc); i++ {
+			if tc, ok := toolCallsAcc[i]; ok {
+				openaiToolCalls = append(openaiToolCalls, model.OpenAIToolCall{
+					Index: i,
+					ID:    tc.ID,
+					Type:  "function",
+					Function: model.OpenAIToolCallFunction{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		message.ToolCalls = openaiToolCalls
+	}
+
+	fReason := "stop"
+	if finishReason == "tool_calls" && len(toolCallsAcc) > 0 {
+		fReason = "tool_calls"
 	}
 
 	c.JSON(http.StatusOK, model.OpenAIResponse{
@@ -229,7 +346,7 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
 		Model:   modelName,
-		Choices: []model.OpenAIChoice{{Index: 0, Message: message, FinishReason: "stop"}},
+		Choices: []model.OpenAIChoice{{Index: 0, Message: message, FinishReason: fReason}},
 		Usage:   usage,
 	})
 }

@@ -26,10 +26,20 @@ type ClaudeResponse struct {
 }
 
 type ClaudeContentBlock struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	Thinking  string                 `json:"thinking,omitempty"`
+	Signature string                 `json:"signature,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Input     map[string]interface{} `json:"input,omitempty"`
+}
+
+type ClaudeToolUseContentBlock struct {
+	Type  string                 `json:"type"`
+	ID    string                 `json:"id"`
+	Name  string                 `json:"name"`
+	Input map[string]interface{} `json:"input"`
 }
 
 type ClaudeThinkingContentBlock struct {
@@ -72,6 +82,11 @@ type ClaudeThinkingDelta struct {
 type ClaudeTextDelta struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type ClaudeInputJsonDelta struct {
+	Type        string `json:"type"`
+	PartialJson string `json:"partial_json"`
 }
 
 type ClaudeStreamContentBlockStop struct {

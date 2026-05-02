@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"traecli-api-proxy/model"
 	"traecli-api-proxy/service"
@@ -15,13 +18,24 @@ import (
 	"github.com/google/uuid"
 )
 
+func writeLog(filename string, content string) {
+	logsDir := "logs"
+	os.MkdirAll(logsDir, 0755)
+	f, err := os.Create(filepath.Join(logsDir, filename))
+	if err != nil {
+		fmt.Printf("[Log] Failed to create log file: %v\n", err)
+		return
+	}
+	defer f.Close()
+	f.WriteString(content)
+}
+
 func HandleClaudeMessages(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
 	if auth == "" {
 		auth = c.GetHeader("X-Api-Key")
 	}
 	auth = strings.TrimPrefix(auth, "Bearer ")
-	fmt.Printf("[Claude] Auth value: %s\n", auth)
 	if auth == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "Authorization or X-Api-Key header is required"}})
 		return
@@ -36,6 +50,10 @@ func HandleClaudeMessages(c *gin.Context) {
 	if req.Model == "" {
 		req.Model = "claude-3-5-sonnet-latest"
 	}
+
+	reqJSON, _ := json.MarshalIndent(req, "", "  ")
+	timestamp := time.Now().Format("20060102_150405")
+	writeLog(fmt.Sprintf("request_%s.json", timestamp), string(reqJSON))
 
 	traeMessages := []model.TraeMessage{}
 	if req.System != nil {
@@ -74,9 +92,9 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	defer resp.RawBody().Close()
 	if req.Stream {
-		handleClaudeStream(c, resp.RawBody(), req.Model)
+		handleClaudeStream(c, resp.RawBody(), req.Model, timestamp)
 	} else {
-		handleClaudeNonStream(c, resp.RawBody(), req.Model)
+		handleClaudeNonStream(c, resp.RawBody(), req.Model, timestamp)
 	}
 }
 
@@ -86,7 +104,7 @@ func writeSSE(c *gin.Context, eventType string, data interface{}) {
 	c.Writer.Flush()
 }
 
-func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
+func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -110,6 +128,9 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	thinkingIndex := 0
 	textIndex := 1
 	var outputTokens int
+	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
+	nextBlockIndex := 2
+	var rawSSE strings.Builder
 
 	reader := bufio.NewReader(body)
 	var currentEvent string
@@ -122,6 +143,7 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 		if line == "" {
 			continue
 		}
+		rawSSE.WriteString(line + "\n")
 		if strings.HasPrefix(line, "event:") {
 			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		} else if strings.HasPrefix(line, "data:") {
@@ -154,6 +176,7 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 					Usage: model.ClaudeUsage{OutputTokens: 0},
 				})
 				writeSSE(c, "message_stop", map[string]string{"type": "message_stop"})
+				writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 				return
 
 			case "output":
@@ -188,6 +211,7 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 					}
 					if !thinkingBlockStarted && !textBlockStarted {
 						textIndex = 0
+						nextBlockIndex = 1
 						writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
 							Type:         "content_block_start",
 							Index:        textIndex,
@@ -202,37 +226,97 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 					})
 				}
 
+				if len(out.ToolCalls) > 0 {
+					for _, tc := range out.ToolCalls {
+						idx := tc.Index
+						if tc.ID != "" {
+							toolCallsAcc[idx] = &model.AccumulatedToolCall{
+								ID:        tc.ID,
+								Name:      tc.FunctionCall.Name,
+								Arguments: tc.FunctionCall.Arguments,
+							}
+						} else if existing, ok := toolCallsAcc[idx]; ok {
+							existing.Arguments += tc.FunctionCall.Arguments
+							if tc.FunctionCall.Name != "" {
+								existing.Name = tc.FunctionCall.Name
+							}
+						}
+					}
+				}
+
 			case "token_usage":
 				var tu model.TraeTokenUsage
 				json.Unmarshal([]byte(dataStr), &tu)
 				outputTokens = tu.CompletionTokens
 
 			case "done":
+				var doneData model.TraeDone
+				json.Unmarshal([]byte(dataStr), &doneData)
+
 				if thinkingBlockStarted {
 					writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
 				}
 				if textBlockStarted {
 					writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: textIndex})
 				}
+
+				if len(toolCallsAcc) > 0 {
+					for i := 0; i < len(toolCallsAcc); i++ {
+						if tc, ok := toolCallsAcc[i]; ok {
+							fmt.Printf("[Claude] Tool call: id=%s name=%s arguments=%s\n", tc.ID, tc.Name, tc.Arguments)
+							toolIndex := nextBlockIndex
+							nextBlockIndex++
+							writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
+								Type:  "content_block_start",
+								Index: toolIndex,
+								ContentBlock: model.ClaudeToolUseContentBlock{
+									Type:  "tool_use",
+									ID:    tc.ID,
+									Name:  tc.Name,
+									Input: map[string]interface{}{},
+								},
+							})
+							writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
+								Type:  "content_block_delta",
+								Index: toolIndex,
+								Delta: model.ClaudeInputJsonDelta{
+									Type:        "input_json_delta",
+									PartialJson: tc.Arguments,
+								},
+							})
+							writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: toolIndex})
+						}
+					}
+				}
+
+				stopReason := "end_turn"
+				if doneData.FinishReason == "tool_calls" && len(toolCallsAcc) > 0 {
+					stopReason = "tool_use"
+				}
 				writeSSE(c, "message_delta", model.ClaudeStreamMessageDelta{
 					Type:  "message_delta",
-					Delta: model.ClaudeMessageDelta{StopReason: "end_turn"},
+					Delta: model.ClaudeMessageDelta{StopReason: stopReason},
 					Usage: model.ClaudeUsage{OutputTokens: outputTokens},
 				})
 				writeSSE(c, "message_stop", map[string]string{"type": "message_stop"})
+				writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 			}
 		}
 	}
 }
 
-func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string) {
+func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
 	var currentEvent string
 	var accumulatedResponse string
 	var accumulatedReasoning string
 	var inputTokens int
 	var outputTokens int
+	var toolCalls []model.TraeToolCall
+	var finishReason string
+	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, data string) bool {
+		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n", event, data))
 		currentEvent = event
 		switch currentEvent {
 		case "error":
@@ -252,14 +336,45 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 			json.Unmarshal([]byte(data), &out)
 			accumulatedResponse += out.Response
 			accumulatedReasoning += out.ReasoningContent
+			if len(out.ToolCalls) > 0 {
+				toolCalls = append(toolCalls, out.ToolCalls...)
+			}
 		case "token_usage":
 			var tu model.TraeTokenUsage
 			json.Unmarshal([]byte(data), &tu)
 			inputTokens = tu.PromptTokens
 			outputTokens = tu.CompletionTokens
+		case "done":
+			var doneData model.TraeDone
+			json.Unmarshal([]byte(data), &doneData)
+			finishReason = doneData.FinishReason
 		}
 		return true
 	})
+
+	writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
+
+	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
+	for _, tc := range toolCalls {
+		idx := tc.Index
+		if tc.ID != "" {
+			toolCallsAcc[idx] = &model.AccumulatedToolCall{
+				ID:        tc.ID,
+				Name:      tc.FunctionCall.Name,
+				Arguments: tc.FunctionCall.Arguments,
+			}
+		} else if existing, ok := toolCallsAcc[idx]; ok {
+			existing.Arguments += tc.FunctionCall.Arguments
+			if tc.FunctionCall.Name != "" {
+				existing.Name = tc.FunctionCall.Name
+			}
+		}
+	}
+
+	stopReason := "end_turn"
+	if finishReason == "tool_calls" && len(toolCallsAcc) > 0 {
+		stopReason = "tool_use"
+	}
 
 	content := []model.ClaudeContentBlock{}
 	if accumulatedReasoning != "" {
@@ -269,7 +384,21 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 			Signature: "ErUB3kr3b0aW5jY2x1ZGVfY2hhbGxlbmdlX3NpZ25hdHVyZV9mYWtlX2Zvcl9wcm94eQ",
 		})
 	}
-	content = append(content, model.ClaudeContentBlock{Type: "text", Text: accumulatedResponse})
+	if accumulatedResponse != "" {
+		content = append(content, model.ClaudeContentBlock{Type: "text", Text: accumulatedResponse})
+	}
+	for i := 0; i < len(toolCallsAcc); i++ {
+		if tc, ok := toolCallsAcc[i]; ok {
+			var input map[string]interface{}
+			json.Unmarshal([]byte(tc.Arguments), &input)
+			content = append(content, model.ClaudeContentBlock{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Name,
+				Input: input,
+			})
+		}
+	}
 
 	c.JSON(http.StatusOK, model.ClaudeResponse{
 		ID:         "msg_" + uuid.New().String(),
@@ -277,7 +406,7 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Role:       "assistant",
 		Content:    content,
 		Model:      modelName,
-		StopReason: "end_turn",
+		StopReason: stopReason,
 		Usage:      model.ClaudeUsage{InputTokens: inputTokens, OutputTokens: outputTokens},
 	})
 }

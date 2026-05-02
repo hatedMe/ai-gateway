@@ -20,10 +20,22 @@ type TraeContent struct {
 	Text string `json:"text"`
 }
 
+type TraeToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type TraeToolCall struct {
+	Index        int                  `json:"index"`
+	ID           string               `json:"id"`
+	Type         string               `json:"type"`
+	FunctionCall TraeToolCallFunction `json:"function_call"`
+}
+
 type TraeOutput struct {
-	Response         string      `json:"response"`
-	ReasoningContent string      `json:"reasoning_content"`
-	ToolCalls        interface{} `json:"tool_calls"`
+	Response         string         `json:"response"`
+	ReasoningContent string         `json:"reasoning_content"`
+	ToolCalls        []TraeToolCall `json:"tool_calls"`
 }
 
 type TraeTokenUsage struct {
@@ -39,4 +51,10 @@ type TraeDone struct {
 type TraeError struct {
 	Code  int    `json:"code"`
 	Error string `json:"error"`
+}
+
+type AccumulatedToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
 }
