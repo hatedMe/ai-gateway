@@ -68,8 +68,52 @@ func HandleChatCompletions(c *gin.Context) {
 	traeMessages := make([]model.TraeMessage, len(req.Messages))
 	var userInput string
 	for i, msg := range req.Messages {
-		contentStr := service.OpenAIContentToString(msg.Content, msg.ToolCalls, msg.Role)
-		traeMessages[i] = model.TraeMessage{Role: msg.Role, Content: []model.TraeContent{{Type: "text", Text: contentStr}}}
+		traeMsg := model.TraeMessage{Role: msg.Role}
+
+		// Handle content
+		contentStr := ""
+		if msg.Content != nil {
+			switch v := msg.Content.(type) {
+			case string:
+				contentStr = v
+			default:
+				j, _ := json.Marshal(v)
+				if string(j) != "null" && string(j) != `""` {
+					contentStr = string(j)
+				}
+			}
+		}
+		traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
+
+		// Handle ToolCalls (Assistant's structured tool call history)
+		if msg.ToolCalls != nil {
+			switch tc := msg.ToolCalls.(type) {
+			case []interface{}:
+				for _, item := range tc {
+					if m, ok := item.(map[string]interface{}); ok {
+						fn, _ := m["function"].(map[string]interface{})
+						name, _ := fn["name"].(string)
+						args, _ := fn["arguments"].(string)
+						id, _ := m["id"].(string)
+						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]interface{}{
+							"id": id,
+							"type": "function",
+							"function": map[string]interface{}{
+								"name": name,
+								"arguments": args,
+							},
+						})
+					}
+				}
+			}
+		}
+
+		// Handle ToolCallID (Tool role's result for a specific call)
+		if msg.ToolCallID != "" {
+			traeMsg.ToolCallID = msg.ToolCallID
+		}
+
+		traeMessages[i] = traeMsg
 		if i == len(req.Messages)-1 && msg.Role == "user" {
 			userInput = contentStr
 		}

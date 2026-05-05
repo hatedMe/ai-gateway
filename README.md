@@ -25,6 +25,7 @@ traecli-api-proxy/
 ├── service/
 │   ├── trae.go                  # 业务层：构建请求、发送请求、格式转换、SSE 解析
 │   └── trae_test.go             # 业务层单元测试
+├── logs/                        # 请求/响应日志（不纳入版本控制）
 ├── config.yaml                  # 运行时配置（不纳入版本控制）
 ├── config.example.yaml          # 配置示例
 ├── go.mod
@@ -36,7 +37,7 @@ traecli-api-proxy/
 | 入口 | `cmd/server` | 加载 config.yaml、注册路由、启动 HTTP 服务                           |
 | 配置 | `config`     | 模型映射表 `ModelMap`、目标 URL 常量 `TargetURL`、`GetModelConfig()` |
 | 数据 | `model`      | 纯结构体定义，按协议分文件（OpenAI / Claude / Trae）                 |
-| 处理 | `handler`    | HTTP 请求解析、认证校验、响应写入、流式/非流式处理                   |
+| 处理 | `handler`    | HTTP 请求解析、认证校验、响应写入、流式/非流式处理、日志记录         |
 | 业务 | `service`    | 构建请求、发送请求、内容转换、工具转换、SSE 读取                     |
 
 ## 快速开始
@@ -220,7 +221,7 @@ curl http://localhost:8318/v1/messages \
 | `stream`     | bool         | 是否流式返回                                           |
 | `tools`      | array        | 工具列表（可选），自动转换 Claude 工具格式为 Trae 格式 |
 
-**响应格式：** 标准 Claude Messages API 格式，包含 `thinking`（思维链）和 `text` 内容块。
+**响应格式：** 标准 Claude Messages API 格式，包含 `thinking`（思维链）、`text` 和 `tool_use` 内容块，工具参数通过 `input_json_delta` 增量传递。
 
 ### GET /v1/models
 
@@ -280,10 +281,29 @@ curl http://localhost:8318/v1/models
 
 ### 请求转换
 
-- **OpenAI → Trae**：将 `messages` 中的 `content` 统一转为 `TraeContent` 格式，最后一条 `user` 消息提取为 `user_input`，`tools` 直接透传
-- **Claude → Trae**：将 `system` 字段转为 `system` 角色消息，`content` 中的多模态块合并为纯文本，`tools` 中的 `input_schema` 转为 JSON 字符串格式的 `parameters`
+- **OpenAI → Trae**：将 `messages` 中的 `content` 统一转为 `TraeContent` 格式，`tool_calls` 转为文本标记，最后一条 `user` 消息提取为 `user_input`，`tools` 直接透传
+- **Claude → Trae**：将 `system` 字段转为 `system` 角色消息，`content` 中的多模态块（`text`/`tool_use`/`tool_result`）合并为纯文本，`tools` 中的 `input_schema` 转为 JSON 字符串格式的 `parameters`
 
 ### 响应转换
 
-- **Trae SSE → OpenAI**：`output` 事件映射为 `chat.completion.chunk`，`done` 事件携带 `finish_reason`，非流式模式累积所有输出后一次性返回
-- **Trae SSE → Claude**：`output` 事件中的 `reasoning_content` 映射为 `thinking` 内容块，`response` 映射为 `text` 内容块，遵循 Claude SSE 协议（`message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`）
+- **Trae SSE → OpenAI**：`output` 事件映射为 `chat.completion.chunk`，`tool_calls` 按 index 累积拼接分片参数后一次性输出，`done` 事件携带 `finish_reason`（有工具调用时为 `tool_calls`），非流式模式累积所有输出后一次性返回
+- **Trae SSE → Claude**：`output` 事件中的 `reasoning_content` 映射为 `thinking` 内容块，`response` 映射为 `text` 内容块，`tool_calls` 按 index 累积拼接分片参数后通过 `tool_use` 内容块输出（`content_block_start` 的 `input` 为空对象，参数通过 `input_json_delta` 增量传递），遵循 Claude SSE 协议（`message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`）
+
+### 工具调用处理
+
+- **流式分片累积**：Trae API 返回的 `tool_calls` 参数可能分多个 SSE 事件到达（第一个携带 `id` 和部分参数，后续只有参数续接），代理按 `index` 累积拼接，确保参数完整
+- **消息转换**：Claude Code 发回的 `tool_use` 和 `tool_result` 内容块转为文本标记（如 `[Tool Use: Bash (id: xxx) Input: {...}]`、`[Tool Result (id: xxx): ...]`），让模型知道工具已执行过，避免重复调用
+- **finish_reason**：有工具调用时 OpenAI 返回 `tool_calls`，Claude 返回 `tool_use`
+
+## 日志
+
+每次请求会在 `logs/` 目录下生成日志文件：
+
+| 文件名格式                            | 内容                         |
+| ------------------------------------- | ---------------------------- |
+| `request_YYYYMMDD_HHMMSS.json`        | Claude 接口收到的完整请求    |
+| `response_YYYYMMDD_HHMMSS.log`        | Trae API 返回的原始 SSE 数据 |
+| `openai_request_YYYYMMDD_HHMMSS.json` | OpenAI 接口收到的完整请求    |
+| `openai_response_YYYYMMDD_HHMMSS.log` | Trae API 返回的原始 SSE 数据 |
+
+`logs/` 目录已加入 `.gitignore`，不会纳入版本控制。

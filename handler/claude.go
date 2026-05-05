@@ -63,8 +63,76 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	var userInput string
 	for i, msg := range req.Messages {
-		contentStr := service.ClaudeContentToString(msg.Content)
-		traeMessages = append(traeMessages, model.TraeMessage{Role: msg.Role, Content: []model.TraeContent{{Type: "text", Text: contentStr}}})
+		traeMsg := model.TraeMessage{Role: msg.Role}
+
+		contentStr := ""
+		switch v := msg.Content.(type) {
+		case string:
+			contentStr = v
+		case []interface{}:
+			var parts []string
+			for _, item := range v {
+				if block, ok := item.(map[string]interface{}); ok {
+					switch block["type"] {
+					case "text":
+						if text, ok := block["text"].(string); ok {
+							parts = append(parts, text)
+						}
+					case "tool_use":
+						name, _ := block["name"].(string)
+						id, _ := block["id"].(string)
+						inputJSON, _ := json.Marshal(block["input"])
+
+						if traeMsg.ToolCalls == nil {
+							traeMsg.ToolCalls = make([]map[string]interface{}, 0)
+						}
+						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]interface{}{
+							"id": id,
+							"type": "function",
+							"function": map[string]interface{}{
+								"name": name,
+								"arguments": string(inputJSON),
+							},
+						})
+					case "tool_result":
+						traeMsg.Role = "tool"
+						id, _ := block["tool_use_id"].(string)
+						traeMsg.ToolCallID = id
+
+						var resultContent string
+						if rc, ok := block["content"].([]interface{}); ok {
+							var rcParts []string
+							for _, rcItem := range rc {
+								if rcBlock, ok := rcItem.(map[string]interface{}); ok {
+									if rcBlock["type"] == "text" {
+										if text, ok := rcBlock["text"].(string); ok {
+											rcParts = append(rcParts, text)
+										}
+									}
+								}
+							}
+							resultContent = strings.Join(rcParts, "\n")
+						} else if text, ok := block["content"].(string); ok {
+							resultContent = text
+						}
+
+						isError, _ := block["is_error"].(bool)
+						if isError {
+							resultContent = "ERROR: " + resultContent
+						}
+						parts = append(parts, resultContent)
+					}
+				}
+			}
+			contentStr = strings.Join(parts, "\n")
+		}
+
+		if contentStr != "" || len(traeMsg.ToolCalls) == 0 {
+			// Always add content block if it's not empty or if there are no tool calls
+			traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
+		}
+
+		traeMessages = append(traeMessages, traeMsg)
 		if i == len(req.Messages)-1 && msg.Role == "user" {
 			userInput = contentStr
 		}
@@ -72,7 +140,9 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
-	payloadJSON, _ := json.Marshal(traePayload)
+	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
+	writeLog(fmt.Sprintf("debug_payload_%s.json", timestamp), string(payloadJSON))
+
 	fmt.Printf("[Claude] Sending to Trae: %s\n", string(payloadJSON))
 
 	resp, err := service.SendTraeRequest(traePayload, auth)

@@ -7,6 +7,6 @@ server:
 trae:
     # 请求头，按需配置
     headers:
-        X-App-Id: "7b3f9dc2-8a4e-5c6d-2f1b-9e4a3c5b7df0"
+        X-App-Id: "<your-app-id>"
         X-Ide-Function: "chat"
         X-Ide-Version-Code: "20260206"

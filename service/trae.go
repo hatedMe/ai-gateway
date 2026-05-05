@@ -170,17 +170,14 @@ func ConvertClaudeToolsToTrae(claudeTools []interface{}) []interface{} {
 			desc, _ := m["description"].(string)
 			inputSchema := m["input_schema"]
 			if name != "" {
-				var paramsStr string
-				if inputSchema != nil {
-					pj, _ := json.Marshal(inputSchema)
-					paramsStr = string(pj)
-				}
+				// input_schema is expected to be a JSON object, but Trae expects parameters as a JSON string
+				schemaBytes, _ := json.Marshal(inputSchema)
 				traeTool := map[string]interface{}{
 					"type": "function",
 					"function": map[string]interface{}{
 						"name":        name,
 						"description": desc,
-						"parameters":  paramsStr,
+						"parameters":  string(schemaBytes),
 					},
 				}
 				traeTools = append(traeTools, traeTool)

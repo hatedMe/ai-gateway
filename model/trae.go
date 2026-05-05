@@ -11,8 +11,10 @@ type TraeRequest struct {
 }
 
 type TraeMessage struct {
-	Role    string        `json:"role"`
-	Content []TraeContent `json:"content"`
+	Role       string                   `json:"role"`
+	Content    []TraeContent            `json:"content"`
+	ToolCalls  []map[string]interface{} `json:"tool_calls,omitempty"`
+	ToolCallID string                   `json:"tool_call_id,omitempty"`
 }
 
 type TraeContent struct {
