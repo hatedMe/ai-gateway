@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
 	"traecli-api-proxy/service"
 
@@ -41,6 +41,9 @@ func HandleClaudeMessages(c *gin.Context) {
 		return
 	}
 
+	rid, _ := c.Get("requestID")
+	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+
 	var req model.ClaudeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": err.Error()}})
@@ -55,107 +58,26 @@ func HandleClaudeMessages(c *gin.Context) {
 	timestamp := time.Now().Format("20060102_150405")
 	writeLog(fmt.Sprintf("request_%s.json", timestamp), string(reqJSON))
 
-	traeMessages := []model.TraeMessage{}
-	if req.System != nil {
-		systemStr := service.ContentToString(req.System)
-		traeMessages = append(traeMessages, model.TraeMessage{Role: "system", Content: []model.TraeContent{{Type: "text", Text: systemStr}}})
-	}
-
-	var userInput string
-	for i, msg := range req.Messages {
-		traeMsg := model.TraeMessage{Role: msg.Role}
-
-		contentStr := ""
-		switch v := msg.Content.(type) {
-		case string:
-			contentStr = v
-		case []interface{}:
-			var parts []string
-			for _, item := range v {
-				if block, ok := item.(map[string]interface{}); ok {
-					switch block["type"] {
-					case "text":
-						if text, ok := block["text"].(string); ok {
-							parts = append(parts, text)
-						}
-					case "tool_use":
-						name, _ := block["name"].(string)
-						id, _ := block["id"].(string)
-						inputJSON, _ := json.Marshal(block["input"])
-
-						if traeMsg.ToolCalls == nil {
-							traeMsg.ToolCalls = make([]map[string]interface{}, 0)
-						}
-						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]interface{}{
-							"id": id,
-							"type": "function",
-							"function": map[string]interface{}{
-								"name": name,
-								"arguments": string(inputJSON),
-							},
-						})
-					case "tool_result":
-						traeMsg.Role = "tool"
-						id, _ := block["tool_use_id"].(string)
-						traeMsg.ToolCallID = id
-
-						var resultContent string
-						if rc, ok := block["content"].([]interface{}); ok {
-							var rcParts []string
-							for _, rcItem := range rc {
-								if rcBlock, ok := rcItem.(map[string]interface{}); ok {
-									if rcBlock["type"] == "text" {
-										if text, ok := rcBlock["text"].(string); ok {
-											rcParts = append(rcParts, text)
-										}
-									}
-								}
-							}
-							resultContent = strings.Join(rcParts, "\n")
-						} else if text, ok := block["content"].(string); ok {
-							resultContent = text
-						}
-
-						isError, _ := block["is_error"].(bool)
-						if isError {
-							resultContent = "ERROR: " + resultContent
-						}
-						parts = append(parts, resultContent)
-					}
-				}
-			}
-			contentStr = strings.Join(parts, "\n")
-		}
-
-		if contentStr != "" || len(traeMsg.ToolCalls) == 0 {
-			// Always add content block if it's not empty or if there are no tool calls
-			traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
-		}
-
-		traeMessages = append(traeMessages, traeMsg)
-		if i == len(req.Messages)-1 && msg.Role == "user" {
-			userInput = contentStr
-		}
-	}
+	traeMessages, userInput := service.ConvertClaudeMessagesToTrae(req.Messages, req.System)
 
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
 	writeLog(fmt.Sprintf("debug_payload_%s.json", timestamp), string(payloadJSON))
 
-	fmt.Printf("[Claude] Sending to Trae: %s\n", string(payloadJSON))
+	logger.Info(ctx, "[Claude] Sending to Trae", "payload", string(payloadJSON))
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
-		fmt.Printf("[Claude] Request error: %v\n", err)
+		logger.Error(ctx, "[Claude] Request error", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"type": "error", "error": map[string]string{"type": "api_error", "message": err.Error()}})
 		return
 	}
-	fmt.Printf("[Claude] Response status: %s\n", resp.Status())
+	logger.Info(ctx, "[Claude] Response status", "status", resp.Status())
 
 	if resp.StatusCode() != 200 {
 		bodyBytes, _ := io.ReadAll(resp.RawBody())
-		fmt.Printf("[Claude] Error response body: %s\n", string(bodyBytes))
+		logger.Error(ctx, "[Claude] Error response body", "body", string(bodyBytes))
 		c.JSON(resp.StatusCode(), gin.H{"type": "error", "error": map[string]string{"type": "api_error", "message": string(bodyBytes)}})
 		return
 	}
@@ -168,13 +90,16 @@ func HandleClaudeMessages(c *gin.Context) {
 	}
 }
 
-func writeSSE(c *gin.Context, eventType string, data interface{}) {
+func writeSSE(c *gin.Context, eventType string, data any) {
 	j, _ := json.Marshal(data)
 	c.Writer.Write([]byte("event: " + eventType + "\ndata: " + string(j) + "\n\n"))
 	c.Writer.Flush()
 }
 
 func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
+	rid, _ := c.Get("requestID")
+	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -202,31 +127,69 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 	nextBlockIndex := 2
 	var rawSSE strings.Builder
 
-	reader := bufio.NewReader(body)
-	var currentEvent string
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			break
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		rawSSE.WriteString(line + "\n")
-		if strings.HasPrefix(line, "event:") {
-			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if dataStr == "" {
-				continue
+	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
+
+		switch event {
+		case "error":
+			var traeErr model.TraeError
+			json.Unmarshal([]byte(dataStr), &traeErr)
+			logger.Error(ctx, "[Claude] Stream error event", "error", traeErr.Error)
+			if !textBlockStarted {
+				writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
+					Type:         "content_block_start",
+					Index:        textIndex,
+					ContentBlock: model.ClaudeTextContentBlock{Type: "text", Text: ""},
+				})
+				textBlockStarted = true
+			}
+			writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
+				Type:  "content_block_delta",
+				Index: textIndex,
+				Delta: model.ClaudeTextDelta{Type: "text_delta", Text: traeErr.Error},
+			})
+			writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: textIndex})
+			writeSSE(c, "message_delta", model.ClaudeStreamMessageDelta{
+				Type:  "message_delta",
+				Delta: model.ClaudeMessageDelta{StopReason: "end_turn"},
+				Usage: model.ClaudeUsage{OutputTokens: 0},
+			})
+			writeSSE(c, "message_stop", map[string]any{"type": "message_stop"})
+			return false
+
+		case "output":
+			var out model.TraeOutput
+			json.Unmarshal([]byte(dataStr), &out)
+
+			if out.ReasoningContent != "" {
+				if !thinkingBlockStarted {
+					writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
+						Type:         "content_block_start",
+						Index:        thinkingIndex,
+						ContentBlock: model.ClaudeThinkingContentBlock{Type: "thinking", Thinking: ""},
+					})
+					thinkingBlockStarted = true
+				}
+				writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
+					Type:  "content_block_delta",
+					Index: thinkingIndex,
+					Delta: model.ClaudeThinkingDelta{Type: "thinking_delta", Thinking: out.ReasoningContent},
+				})
 			}
 
-			switch currentEvent {
-			case "error":
-				var traeErr model.TraeError
-				json.Unmarshal([]byte(dataStr), &traeErr)
-				if !textBlockStarted {
+			if out.Response != "" {
+				if thinkingBlockStarted && !textBlockStarted {
+					writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
+					writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
+						Type:         "content_block_start",
+						Index:        textIndex,
+						ContentBlock: model.ClaudeTextContentBlock{Type: "text", Text: ""},
+					})
+					textBlockStarted = true
+				}
+				if !thinkingBlockStarted && !textBlockStarted {
+					textIndex = 0
+					nextBlockIndex = 1
 					writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
 						Type:         "content_block_start",
 						Index:        textIndex,
@@ -237,146 +200,82 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 				writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
 					Type:  "content_block_delta",
 					Index: textIndex,
-					Delta: model.ClaudeTextDelta{Type: "text_delta", Text: traeErr.Error},
+					Delta: model.ClaudeTextDelta{Type: "text_delta", Text: out.Response},
 				})
-				writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: textIndex})
-				writeSSE(c, "message_delta", model.ClaudeStreamMessageDelta{
-					Type:  "message_delta",
-					Delta: model.ClaudeMessageDelta{StopReason: "end_turn"},
-					Usage: model.ClaudeUsage{OutputTokens: 0},
-				})
-				writeSSE(c, "message_stop", map[string]string{"type": "message_stop"})
-				writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
-				return
-
-			case "output":
-				var out model.TraeOutput
-				json.Unmarshal([]byte(dataStr), &out)
-
-				if out.ReasoningContent != "" {
-					if !thinkingBlockStarted {
-						writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
-							Type:         "content_block_start",
-							Index:        thinkingIndex,
-							ContentBlock: model.ClaudeThinkingContentBlock{Type: "thinking", Thinking: ""},
-						})
-						thinkingBlockStarted = true
-					}
-					writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
-						Type:  "content_block_delta",
-						Index: thinkingIndex,
-						Delta: model.ClaudeThinkingDelta{Type: "thinking_delta", Thinking: out.ReasoningContent},
-					})
-				}
-
-				if out.Response != "" {
-					if thinkingBlockStarted && !textBlockStarted {
-						writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
-						writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
-							Type:         "content_block_start",
-							Index:        textIndex,
-							ContentBlock: model.ClaudeTextContentBlock{Type: "text", Text: ""},
-						})
-						textBlockStarted = true
-					}
-					if !thinkingBlockStarted && !textBlockStarted {
-						textIndex = 0
-						nextBlockIndex = 1
-						writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
-							Type:         "content_block_start",
-							Index:        textIndex,
-							ContentBlock: model.ClaudeTextContentBlock{Type: "text", Text: ""},
-						})
-						textBlockStarted = true
-					}
-					writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
-						Type:  "content_block_delta",
-						Index: textIndex,
-						Delta: model.ClaudeTextDelta{Type: "text_delta", Text: out.Response},
-					})
-				}
-
-				if len(out.ToolCalls) > 0 {
-					for _, tc := range out.ToolCalls {
-						idx := tc.Index
-						if tc.ID != "" {
-							toolCallsAcc[idx] = &model.AccumulatedToolCall{
-								ID:        tc.ID,
-								Name:      tc.FunctionCall.Name,
-								Arguments: tc.FunctionCall.Arguments,
-							}
-						} else if existing, ok := toolCallsAcc[idx]; ok {
-							existing.Arguments += tc.FunctionCall.Arguments
-							if tc.FunctionCall.Name != "" {
-								existing.Name = tc.FunctionCall.Name
-							}
-						}
-					}
-				}
-
-			case "token_usage":
-				var tu model.TraeTokenUsage
-				json.Unmarshal([]byte(dataStr), &tu)
-				outputTokens = tu.CompletionTokens
-
-			case "done":
-				var doneData model.TraeDone
-				json.Unmarshal([]byte(dataStr), &doneData)
-
-				if thinkingBlockStarted {
-					writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
-				}
-				if textBlockStarted {
-					writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: textIndex})
-				}
-
-				if len(toolCallsAcc) > 0 {
-					for i := 0; i < len(toolCallsAcc); i++ {
-						if tc, ok := toolCallsAcc[i]; ok {
-							fmt.Printf("[Claude] Tool call: id=%s name=%s arguments=%s\n", tc.ID, tc.Name, tc.Arguments)
-							toolIndex := nextBlockIndex
-							nextBlockIndex++
-							writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
-								Type:  "content_block_start",
-								Index: toolIndex,
-								ContentBlock: model.ClaudeToolUseContentBlock{
-									Type:  "tool_use",
-									ID:    tc.ID,
-									Name:  tc.Name,
-									Input: map[string]interface{}{},
-								},
-							})
-							writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
-								Type:  "content_block_delta",
-								Index: toolIndex,
-								Delta: model.ClaudeInputJsonDelta{
-									Type:        "input_json_delta",
-									PartialJson: tc.Arguments,
-								},
-							})
-							writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: toolIndex})
-						}
-					}
-				}
-
-				stopReason := "end_turn"
-				if doneData.FinishReason == "tool_calls" && len(toolCallsAcc) > 0 {
-					stopReason = "tool_use"
-				}
-				writeSSE(c, "message_delta", model.ClaudeStreamMessageDelta{
-					Type:  "message_delta",
-					Delta: model.ClaudeMessageDelta{StopReason: stopReason},
-					Usage: model.ClaudeUsage{OutputTokens: outputTokens},
-				})
-				writeSSE(c, "message_stop", map[string]string{"type": "message_stop"})
-				writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 			}
+
+			if len(out.ToolCalls) > 0 {
+				for _, tc := range out.ToolCalls {
+					service.AccumulateToolCall(toolCallsAcc, tc)
+				}
+			}
+
+		case "token_usage":
+			var tu model.TraeTokenUsage
+			json.Unmarshal([]byte(dataStr), &tu)
+			outputTokens = tu.CompletionTokens
+
+		case "done":
+			var doneData model.TraeDone
+			json.Unmarshal([]byte(dataStr), &doneData)
+
+			if thinkingBlockStarted {
+				writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
+			}
+			if textBlockStarted {
+				writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: textIndex})
+			}
+
+			if len(toolCallsAcc) > 0 {
+				for i := 0; i < len(toolCallsAcc); i++ {
+					if tc, ok := toolCallsAcc[i]; ok {
+						logger.Info(ctx, "[Claude] Tool call", "id", tc.ID, "name", tc.Name, "arguments", tc.Arguments)
+						toolIndex := nextBlockIndex
+						nextBlockIndex++
+						writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
+							Type:  "content_block_start",
+							Index: toolIndex,
+							ContentBlock: model.ClaudeToolUseContentBlock{
+								Type:  "tool_use",
+								ID:    tc.ID,
+								Name:  tc.Name,
+								Input: map[string]any{},
+							},
+						})
+						writeSSE(c, "content_block_delta", model.ClaudeStreamContentBlockDelta{
+							Type:  "content_block_delta",
+							Index: toolIndex,
+							Delta: model.ClaudeInputJsonDelta{
+								Type:        "input_json_delta",
+								PartialJson: tc.Arguments,
+							},
+						})
+						writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: toolIndex})
+					}
+				}
+			}
+
+			stopReason := "end_turn"
+			if doneData.FinishReason == "tool_calls" && len(toolCallsAcc) > 0 {
+				stopReason = "tool_use"
+			}
+			writeSSE(c, "message_delta", model.ClaudeStreamMessageDelta{
+				Type:  "message_delta",
+				Delta: model.ClaudeMessageDelta{StopReason: stopReason},
+				Usage: model.ClaudeUsage{OutputTokens: outputTokens},
+			})
+			writeSSE(c, "message_stop", map[string]any{"type": "message_stop"})
 		}
-	}
+		return true
+	})
+
+	writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 }
 
 func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
-	var currentEvent string
+	rid, _ := c.Get("requestID")
+	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+
 	var accumulatedResponse string
 	var accumulatedReasoning string
 	var inputTokens int
@@ -386,9 +285,9 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string,
 	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, data string) bool {
+		logger.Debug(ctx, "Read SSE event", "event", event, "data", data)
 		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n", event, data))
-		currentEvent = event
-		switch currentEvent {
+		switch event {
 		case "error":
 			var traeErr model.TraeError
 			json.Unmarshal([]byte(data), &traeErr)
@@ -426,19 +325,7 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string,
 
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	for _, tc := range toolCalls {
-		idx := tc.Index
-		if tc.ID != "" {
-			toolCallsAcc[idx] = &model.AccumulatedToolCall{
-				ID:        tc.ID,
-				Name:      tc.FunctionCall.Name,
-				Arguments: tc.FunctionCall.Arguments,
-			}
-		} else if existing, ok := toolCallsAcc[idx]; ok {
-			existing.Arguments += tc.FunctionCall.Arguments
-			if tc.FunctionCall.Name != "" {
-				existing.Name = tc.FunctionCall.Name
-			}
-		}
+		service.AccumulateToolCall(toolCallsAcc, tc)
 	}
 
 	stopReason := "end_turn"
@@ -459,7 +346,7 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string,
 	}
 	for i := 0; i < len(toolCallsAcc); i++ {
 		if tc, ok := toolCallsAcc[i]; ok {
-			var input map[string]interface{}
+			var input map[string]any
 			json.Unmarshal([]byte(tc.Arguments), &input)
 			content = append(content, model.ClaudeContentBlock{
 				Type:  "tool_use",

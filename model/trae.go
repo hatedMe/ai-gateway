@@ -6,15 +6,15 @@ type TraeRequest struct {
 	Messages       []TraeMessage `json:"messages"`
 	ModelName      string        `json:"model_name"`
 	SessionID      string        `json:"session_id"`
-	Tools          []interface{} `json:"tools"`
+	Tools          []any         `json:"tools"`
 	UserInput      string        `json:"user_input"`
 }
 
 type TraeMessage struct {
-	Role       string                   `json:"role"`
-	Content    []TraeContent            `json:"content"`
-	ToolCalls  []map[string]interface{} `json:"tool_calls,omitempty"`
-	ToolCallID string                   `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    []TraeContent    `json:"content"`
+	ToolCalls  []map[string]any `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type TraeContent struct {

@@ -37,6 +37,10 @@ trae:
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("requestID", "test-request-id")
+		c.Next()
+	})
 	r.GET("/v1/models", HandleModels)
 	r.POST("/v1/chat/completions", HandleChatCompletions)
 	r.POST("/v1/messages", HandleClaudeMessages)

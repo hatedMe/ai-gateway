@@ -4,14 +4,14 @@ type ClaudeRequest struct {
 	Model     string          `json:"model"`
 	MaxTokens int             `json:"max_tokens"`
 	Messages  []ClaudeMessage `json:"messages"`
-	System    interface{}     `json:"system,omitempty"`
+	System    any             `json:"system,omitempty"`
 	Stream    bool            `json:"stream"`
-	Tools     []interface{}   `json:"tools,omitempty"`
+	Tools     []any           `json:"tools,omitempty"`
 }
 
 type ClaudeMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
 }
 
 type ClaudeResponse struct {
@@ -20,26 +20,26 @@ type ClaudeResponse struct {
 	Role         string               `json:"role"`
 	Content      []ClaudeContentBlock `json:"content"`
 	Model        string               `json:"model"`
-	StopReason   interface{}          `json:"stop_reason"`
-	StopSequence interface{}          `json:"stop_sequence"`
+	StopReason   any                  `json:"stop_reason"`
+	StopSequence any                  `json:"stop_sequence"`
 	Usage        ClaudeUsage          `json:"usage"`
 }
 
 type ClaudeContentBlock struct {
-	Type      string                 `json:"type"`
-	Text      string                 `json:"text,omitempty"`
-	Thinking  string                 `json:"thinking,omitempty"`
-	Signature string                 `json:"signature,omitempty"`
-	ID        string                 `json:"id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Input     map[string]interface{} `json:"input,omitempty"`
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	Thinking  string         `json:"thinking,omitempty"`
+	Signature string         `json:"signature,omitempty"`
+	ID        string         `json:"id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
 }
 
 type ClaudeToolUseContentBlock struct {
-	Type  string                 `json:"type"`
-	ID    string                 `json:"id"`
-	Name  string                 `json:"name"`
-	Input map[string]interface{} `json:"input"`
+	Type  string         `json:"type"`
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input"`
 }
 
 type ClaudeThinkingContentBlock struct {
@@ -63,15 +63,15 @@ type ClaudeStreamMessageStart struct {
 }
 
 type ClaudeStreamContentBlockStart struct {
-	Type         string      `json:"type"`
-	Index        int         `json:"index"`
-	ContentBlock interface{} `json:"content_block"`
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock any    `json:"content_block"`
 }
 
 type ClaudeStreamContentBlockDelta struct {
-	Type  string      `json:"type"`
-	Index int         `json:"index"`
-	Delta interface{} `json:"delta"`
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+	Delta any    `json:"delta"`
 }
 
 type ClaudeThinkingDelta struct {
@@ -101,6 +101,6 @@ type ClaudeStreamMessageDelta struct {
 }
 
 type ClaudeMessageDelta struct {
-	StopReason   string      `json:"stop_reason"`
-	StopSequence interface{} `json:"stop_sequence"`
+	StopReason   string `json:"stop_reason"`
+	StopSequence any    `json:"stop_sequence"`
 }

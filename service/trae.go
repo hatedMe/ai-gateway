@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"traecli-api-proxy/config"
 	"traecli-api-proxy/model"
@@ -14,7 +16,23 @@ import (
 	"github.com/google/uuid"
 )
 
-func BuildTraeRequest(traeMessages []model.TraeMessage, modelName string, tools []interface{}, userInput string) model.TraeRequest {
+var (
+	httpClient *resty.Client
+	clientOnce sync.Once
+)
+
+func GetHTTPClient() *resty.Client {
+	clientOnce.Do(func() {
+		httpClient = resty.New().
+			SetTimeout(120 * time.Second).
+			SetHeader("User-Agent", "Go-http-client/1.1").
+			SetHeader("Host", "console.enterprise.trae.cn").
+			SetDoNotParseResponse(true)
+	})
+	return httpClient
+}
+
+func BuildTraeRequest(traeMessages []model.TraeMessage, modelName string, tools []any, userInput string) model.TraeRequest {
 	modelCfg := config.GetModelConfig(modelName)
 	return model.TraeRequest{
 		ConfigName:     modelCfg.ConfigName,
@@ -27,6 +45,22 @@ func BuildTraeRequest(traeMessages []model.TraeMessage, modelName string, tools 
 	}
 }
 
+func AccumulateToolCall(acc map[int]*model.AccumulatedToolCall, tc model.TraeToolCall) {
+	idx := tc.Index
+	if tc.ID != "" {
+		acc[idx] = &model.AccumulatedToolCall{
+			ID:        tc.ID,
+			Name:      tc.FunctionCall.Name,
+			Arguments: tc.FunctionCall.Arguments,
+		}
+	} else if existing, ok := acc[idx]; ok {
+		existing.Arguments += tc.FunctionCall.Arguments
+		if tc.FunctionCall.Name != "" {
+			existing.Name = tc.FunctionCall.Name
+		}
+	}
+}
+
 func SendTraeRequest(traePayload model.TraeRequest, auth string) (*resty.Response, error) {
 	if config.Cfg == nil {
 		return nil, fmt.Errorf("config not loaded")
@@ -36,13 +70,10 @@ func SendTraeRequest(traePayload model.TraeRequest, auth string) (*resty.Respons
 		return nil, fmt.Errorf("authorization header is required")
 	}
 
-	req := resty.New().R().
+	req := GetHTTPClient().R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Authorization", auth).
-		SetHeader("User-Agent", "Go-http-client/1.1").
-		SetHeader("Host", "console.enterprise.trae.cn").
-		SetBody(traePayload).
-		SetDoNotParseResponse(true)
+		SetBody(traePayload)
 
 	for k, v := range config.Cfg.Trae.Headers {
 		req = req.SetHeader(k, v)
@@ -51,7 +82,10 @@ func SendTraeRequest(traePayload model.TraeRequest, auth string) (*resty.Respons
 	return req.Post(config.TargetURL)
 }
 
-func ContentToString(content interface{}) string {
+func ContentToString(content any) string {
+	if content == nil {
+		return ""
+	}
 	switch v := content.(type) {
 	case string:
 		return v
@@ -61,14 +95,14 @@ func ContentToString(content interface{}) string {
 	}
 }
 
-func ClaudeContentToString(content interface{}) string {
+func ClaudeContentToString(content any) string {
 	switch v := content.(type) {
 	case string:
 		return v
-	case []interface{}:
+	case []any:
 		var parts []string
 		for _, item := range v {
-			if block, ok := item.(map[string]interface{}); ok {
+			if block, ok := item.(map[string]any); ok {
 				switch block["type"] {
 				case "text":
 					if text, ok := block["text"].(string); ok {
@@ -82,10 +116,10 @@ func ClaudeContentToString(content interface{}) string {
 				case "tool_result":
 					id, _ := block["tool_use_id"].(string)
 					var resultContent string
-					if rc, ok := block["content"].([]interface{}); ok {
+					if rc, ok := block["content"].([]any); ok {
 						var rcParts []string
 						for _, rcItem := range rc {
-							if rcBlock, ok := rcItem.(map[string]interface{}); ok {
+							if rcBlock, ok := rcItem.(map[string]any); ok {
 								if rcBlock["type"] == "text" {
 									if text, ok := rcBlock["text"].(string); ok {
 										rcParts = append(rcParts, text)
@@ -113,19 +147,19 @@ func ClaudeContentToString(content interface{}) string {
 	}
 }
 
-func FilterBlockedTools(tools []interface{}) []interface{} {
+func FilterBlockedTools(tools []any) []any {
 	return tools
 }
 
-func OpenAIContentToString(content interface{}, toolCalls interface{}, role string) string {
+func OpenAIContentToString(content any, toolCalls any, role string) string {
 	var parts []string
 
 	if toolCalls != nil {
 		switch tc := toolCalls.(type) {
-		case []interface{}:
+		case []any:
 			for _, item := range tc {
-				if m, ok := item.(map[string]interface{}); ok {
-					fn, _ := m["function"].(map[string]interface{})
+				if m, ok := item.(map[string]any); ok {
+					fn, _ := m["function"].(map[string]any)
 					name, _ := fn["name"].(string)
 					args, _ := fn["arguments"].(string)
 					id, _ := m["id"].(string)
@@ -156,12 +190,12 @@ func OpenAIContentToString(content interface{}, toolCalls interface{}, role stri
 	return strings.Join(parts, "\n")
 }
 
-func ConvertClaudeToolsToTrae(claudeTools []interface{}) []interface{} {
-	var traeTools []interface{}
+func ConvertClaudeToolsToTrae(claudeTools []any) []any {
+	var traeTools []any
 	for _, tool := range claudeTools {
-		if m, ok := tool.(map[string]interface{}); ok {
+		if m, ok := tool.(map[string]any); ok {
 			if m["type"] == "function" {
-				if _, ok := m["function"].(map[string]interface{}); ok {
+				if _, ok := m["function"].(map[string]any); ok {
 					traeTools = append(traeTools, m)
 					continue
 				}
@@ -172,9 +206,9 @@ func ConvertClaudeToolsToTrae(claudeTools []interface{}) []interface{} {
 			if name != "" {
 				// input_schema is expected to be a JSON object, but Trae expects parameters as a JSON string
 				schemaBytes, _ := json.Marshal(inputSchema)
-				traeTool := map[string]interface{}{
+				traeTool := map[string]any{
 					"type": "function",
-					"function": map[string]interface{}{
+					"function": map[string]any{
 						"name":        name,
 						"description": desc,
 						"parameters":  string(schemaBytes),
@@ -199,10 +233,10 @@ func ReadTraeSSE(body io.ReadCloser, onEvent func(event string, data string) boo
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "event:") {
-			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if s, ok := strings.CutPrefix(line, "event:"); ok {
+			currentEvent = strings.TrimSpace(s)
+		} else if s, ok := strings.CutPrefix(line, "data:"); ok {
+			dataStr := strings.TrimSpace(s)
 			if dataStr == "" {
 				continue
 			}
@@ -211,4 +245,143 @@ func ReadTraeSSE(body io.ReadCloser, onEvent func(event string, data string) boo
 			}
 		}
 	}
+}
+
+func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.TraeMessage, string) {
+	traeMessages := make([]model.TraeMessage, len(openaiMessages))
+	var userInput string
+	for i, msg := range openaiMessages {
+		traeMsg := model.TraeMessage{Role: msg.Role}
+
+		contentStr := ""
+		if msg.Content != nil {
+			switch v := msg.Content.(type) {
+			case string:
+				contentStr = v
+			default:
+				j, _ := json.Marshal(v)
+				if string(j) != "null" && string(j) != `""` {
+					contentStr = string(j)
+				}
+			}
+		}
+		traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
+
+		if msg.ToolCalls != nil {
+			switch tc := msg.ToolCalls.(type) {
+			case []any:
+				for _, item := range tc {
+					if m, ok := item.(map[string]any); ok {
+						fn, _ := m["function"].(map[string]any)
+						name, _ := fn["name"].(string)
+						args, _ := fn["arguments"].(string)
+						id, _ := m["id"].(string)
+						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
+							"id": id,
+							"type": "function",
+							"function": map[string]any{
+								"name": name,
+								"arguments": args,
+							},
+						})
+					}
+				}
+			}
+		}
+
+		if msg.ToolCallID != "" {
+			traeMsg.ToolCallID = msg.ToolCallID
+		}
+
+		traeMessages[i] = traeMsg
+		if i == len(openaiMessages)-1 && msg.Role == "user" {
+			userInput = contentStr
+		}
+	}
+	return traeMessages, userInput
+}
+
+func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system any) ([]model.TraeMessage, string) {
+	traeMessages := []model.TraeMessage{}
+	if system != nil {
+		systemStr := ContentToString(system)
+		traeMessages = append(traeMessages, model.TraeMessage{Role: "system", Content: []model.TraeContent{{Type: "text", Text: systemStr}}})
+	}
+
+	var userInput string
+	for i, msg := range claudeMessages {
+		traeMsg := model.TraeMessage{Role: msg.Role}
+
+		contentStr := ""
+		switch v := msg.Content.(type) {
+		case string:
+			contentStr = v
+		case []any:
+			var parts []string
+			for _, item := range v {
+				if block, ok := item.(map[string]any); ok {
+					switch block["type"] {
+					case "text":
+						if text, ok := block["text"].(string); ok {
+							parts = append(parts, text)
+						}
+					case "tool_use":
+						name, _ := block["name"].(string)
+						id, _ := block["id"].(string)
+						inputJSON, _ := json.Marshal(block["input"])
+
+						if traeMsg.ToolCalls == nil {
+							traeMsg.ToolCalls = make([]map[string]any, 0)
+						}
+						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
+							"id": id,
+							"type": "function",
+							"function": map[string]any{
+								"name": name,
+								"arguments": string(inputJSON),
+							},
+						})
+					case "tool_result":
+						traeMsg.Role = "tool"
+						id, _ := block["tool_use_id"].(string)
+						traeMsg.ToolCallID = id
+
+						var resultContent string
+						if rc, ok := block["content"].([]any); ok {
+							var rcParts []string
+							for _, rcItem := range rc {
+								if rcBlock, ok := rcItem.(map[string]any); ok {
+									if rcBlock["type"] == "text" {
+										if text, ok := rcBlock["text"].(string); ok {
+											rcParts = append(rcParts, text)
+										}
+									}
+								}
+							}
+							resultContent = strings.Join(rcParts, "\n")
+						} else if text, ok := block["content"].(string); ok {
+							resultContent = text
+						}
+
+						isError, _ := block["is_error"].(bool)
+						if isError {
+							resultContent = "ERROR: " + resultContent
+						}
+						parts = append(parts, resultContent)
+					}
+				}
+			}
+			contentStr = strings.Join(parts, "\n")
+		}
+
+		if contentStr != "" || len(traeMsg.ToolCalls) == 0 {
+			traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
+		}
+
+		traeMessages = append(traeMessages, traeMsg)
+		if i == len(claudeMessages)-1 && msg.Role == "user" {
+			userInput = contentStr
+		}
+	}
+	return traeMessages, userInput
 }

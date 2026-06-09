@@ -4,15 +4,15 @@ type OpenAIRequest struct {
 	Model    string          `json:"model"`
 	Messages []OpenAIMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
-	Tools    []interface{}   `json:"tools"`
+	Tools    []any           `json:"tools"`
 }
 
 type OpenAIMessage struct {
-	Role             string      `json:"role"`
-	Content          interface{} `json:"content,omitempty"`
-	ReasoningContent interface{} `json:"reasoning_content,omitempty"`
-	ToolCalls        interface{} `json:"tool_calls,omitempty"`
-	ToolCallID       string      `json:"tool_call_id,omitempty"`
+	Role             string `json:"role"`
+	Content          any    `json:"content,omitempty"`
+	ReasoningContent any    `json:"reasoning_content,omitempty"`
+	ToolCalls        any    `json:"tool_calls,omitempty"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
 }
 
 type OpenAIToolCall struct {
@@ -59,12 +59,12 @@ type OpenAIChunk struct {
 type OpenAIChunkChoice struct {
 	Index        int         `json:"index"`
 	Delta        OpenAIDelta `json:"delta"`
-	FinishReason interface{} `json:"finish_reason"`
+	FinishReason any         `json:"finish_reason"`
 }
 
 type OpenAIDelta struct {
-	Role             string      `json:"role,omitempty"`
-	Content          interface{} `json:"content,omitempty"`
-	ReasoningContent interface{} `json:"reasoning_content,omitempty"`
-	ToolCalls        interface{} `json:"tool_calls,omitempty"`
+	Role             string `json:"role,omitempty"`
+	Content          any    `json:"content,omitempty"`
+	ReasoningContent any    `json:"reasoning_content,omitempty"`
+	ToolCalls        any    `json:"tool_calls,omitempty"`
 }

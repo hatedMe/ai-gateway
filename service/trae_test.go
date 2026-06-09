@@ -41,13 +41,13 @@ func TestContentToString_String(t *testing.T) {
 
 func TestContentToString_Nil(t *testing.T) {
 	result := ContentToString(nil)
-	if result != "null" {
-		t.Errorf("expected null, got %s", result)
+	if result != "" {
+		t.Errorf("expected empty string, got %s", result)
 	}
 }
 
 func TestContentToString_Map(t *testing.T) {
-	result := ContentToString(map[string]string{"key": "value"})
+	result := ContentToString(map[string]any{"key": "value"})
 	expected := `{"key":"value"}`
 	if result != expected {
 		t.Errorf("expected %s, got %s", expected, result)
@@ -62,9 +62,9 @@ func TestClaudeContentToString_String(t *testing.T) {
 }
 
 func TestClaudeContentToString_ContentBlocks(t *testing.T) {
-	input := []interface{}{
-		map[string]interface{}{"type": "text", "text": "hello"},
-		map[string]interface{}{"type": "text", "text": "world"},
+	input := []any{
+		map[string]any{"type": "text", "text": "hello"},
+		map[string]any{"type": "text", "text": "world"},
 	}
 	result := ClaudeContentToString(input)
 	if result != "hello\nworld" {
@@ -73,9 +73,9 @@ func TestClaudeContentToString_ContentBlocks(t *testing.T) {
 }
 
 func TestClaudeContentToString_NonTextBlock(t *testing.T) {
-	input := []interface{}{
-		map[string]interface{}{"type": "image", "source": "data"},
-		map[string]interface{}{"type": "text", "text": "hello"},
+	input := []any{
+		map[string]any{"type": "image", "source": "data"},
+		map[string]any{"type": "text", "text": "hello"},
 	}
 	result := ClaudeContentToString(input)
 	if result != "hello" {
@@ -84,10 +84,10 @@ func TestClaudeContentToString_NonTextBlock(t *testing.T) {
 }
 
 func TestConvertClaudeToolsToTrae_AlreadyOpenAIFormat(t *testing.T) {
-	input := []interface{}{
-		map[string]interface{}{
+	input := []any{
+		map[string]any{
 			"type": "function",
-			"function": map[string]interface{}{
+			"function": map[string]any{
 				"name":        "get_weather",
 				"description": "Get weather",
 				"parameters":  `{"type":"object"}`,
@@ -98,21 +98,21 @@ func TestConvertClaudeToolsToTrae_AlreadyOpenAIFormat(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
-	tool := result[0].(map[string]interface{})
+	tool := result[0].(map[string]any)
 	if tool["type"] != "function" {
 		t.Errorf("expected type function, got %v", tool["type"])
 	}
 }
 
 func TestConvertClaudeToolsToTrae_ClaudeFormat(t *testing.T) {
-	input := []interface{}{
-		map[string]interface{}{
+	input := []any{
+		map[string]any{
 			"name":        "get_weather",
 			"description": "Get weather info",
-			"input_schema": map[string]interface{}{
+			"input_schema": map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"city": map[string]interface{}{"type": "string"},
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
 				},
 			},
 		},
@@ -121,11 +121,11 @@ func TestConvertClaudeToolsToTrae_ClaudeFormat(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
-	tool := result[0].(map[string]interface{})
+	tool := result[0].(map[string]any)
 	if tool["type"] != "function" {
 		t.Errorf("expected type function, got %v", tool["type"])
 	}
-	fn := tool["function"].(map[string]interface{})
+	fn := tool["function"].(map[string]any)
 	if fn["name"] != "get_weather" {
 		t.Errorf("expected name get_weather, got %v", fn["name"])
 	}
@@ -133,7 +133,7 @@ func TestConvertClaudeToolsToTrae_ClaudeFormat(t *testing.T) {
 	if !ok {
 		t.Errorf("expected parameters to be string, got %T", fn["parameters"])
 	}
-	var params map[string]interface{}
+	var params map[string]any
 	if err := json.Unmarshal([]byte(paramsStr), &params); err != nil {
 		t.Errorf("parameters is not valid JSON: %v", err)
 	}
@@ -143,8 +143,8 @@ func TestConvertClaudeToolsToTrae_ClaudeFormat(t *testing.T) {
 }
 
 func TestConvertClaudeToolsToTrae_EmptyName(t *testing.T) {
-	input := []interface{}{
-		map[string]interface{}{
+	input := []any{
+		map[string]any{
 			"description": "no name tool",
 		},
 	}
@@ -240,5 +240,43 @@ func TestBuildTraeRequest(t *testing.T) {
 	}
 	if req.SessionID == "" {
 		t.Error("expected non-empty SessionID")
+	}
+}
+
+func TestAccumulateToolCall(t *testing.T) {
+	acc := make(map[int]*model.AccumulatedToolCall)
+
+	// First chunk
+	tc1 := model.TraeToolCall{
+		Index: 0,
+		ID:    "call_123",
+		FunctionCall: model.TraeToolCallFunction{
+			Name:      "get_weather",
+			Arguments: `{"city":`,
+		},
+	}
+	AccumulateToolCall(acc, tc1)
+
+	if acc[0].ID != "call_123" {
+		t.Errorf("expected ID call_123, got %s", acc[0].ID)
+	}
+	if acc[0].Name != "get_weather" {
+		t.Errorf("expected name get_weather, got %s", acc[0].Name)
+	}
+	if acc[0].Arguments != `{"city":` {
+		t.Errorf("expected arguments '{\"city\":', got '%s'", acc[0].Arguments)
+	}
+
+	// Second chunk
+	tc2 := model.TraeToolCall{
+		Index: 0,
+		FunctionCall: model.TraeToolCallFunction{
+			Arguments: `"Beijing"}`,
+		},
+	}
+	AccumulateToolCall(acc, tc2)
+
+	if acc[0].Arguments != `{"city":"Beijing"}` {
+		t.Errorf("expected combined arguments '{\"city\":\"Beijing\"}', got '%s'", acc[0].Arguments)
 	}
 }
