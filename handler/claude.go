@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
@@ -45,7 +44,13 @@ func HandleClaudeMessages(c *gin.Context) {
 	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
 
 	var req model.ClaudeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": "failed to read request body"}})
+		return
+	}
+	writeLog(fmt.Sprintf("claude_request_%s.json", rid), string(rawBody))
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": err.Error()}})
 		return
 	}
@@ -54,18 +59,14 @@ func HandleClaudeMessages(c *gin.Context) {
 		req.Model = "claude-3-5-sonnet-latest"
 	}
 
-	reqJSON, _ := json.MarshalIndent(req, "", "  ")
-	timestamp := time.Now().Format("20060102_150405")
-	writeLog(fmt.Sprintf("request_%s.json", timestamp), string(reqJSON))
+	logger.Info(ctx, "[Claude] Request received", "model", req.Model, "stream", req.Stream, "messages_count", len(req.Messages), "tools_count", len(req.Tools))
 
 	traeMessages, userInput := service.ConvertClaudeMessagesToTrae(req.Messages, req.System)
 
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(fmt.Sprintf("debug_payload_%s.json", timestamp), string(payloadJSON))
-
-	logger.Info(ctx, "[Claude] Sending to Trae", "payload", string(payloadJSON))
+	writeLog(fmt.Sprintf("claude_payload_%s.json", rid), string(payloadJSON))
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
@@ -84,9 +85,9 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	defer resp.RawBody().Close()
 	if req.Stream {
-		handleClaudeStream(c, resp.RawBody(), req.Model, timestamp)
+		handleClaudeStream(c, resp.RawBody(), req.Model)
 	} else {
-		handleClaudeNonStream(c, resp.RawBody(), req.Model, timestamp)
+		handleClaudeNonStream(c, resp.RawBody(), req.Model)
 	}
 }
 
@@ -96,7 +97,7 @@ func writeSSE(c *gin.Context, eventType string, data any) {
 	c.Writer.Flush()
 }
 
-func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
+func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	rid, _ := c.Get("requestID")
 	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
 
@@ -125,10 +126,8 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 	var outputTokens int
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	nextBlockIndex := 2
-	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
-		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
 
 		switch event {
 		case "error":
@@ -266,27 +265,22 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 			})
 			writeSSE(c, "message_stop", map[string]any{"type": "message_stop"})
 		}
+		if event == "done" {
+			return false
+		}
 		return true
 	})
-
-	writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 }
 
-func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
-
+func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	var accumulatedResponse string
 	var accumulatedReasoning string
 	var inputTokens int
 	var outputTokens int
 	var toolCalls []model.TraeToolCall
 	var finishReason string
-	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, data string) bool {
-		logger.Debug(ctx, "Read SSE event", "event", event, "data", data)
-		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n", event, data))
 		switch event {
 		case "error":
 			var traeErr model.TraeError
@@ -320,8 +314,6 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string,
 		}
 		return true
 	})
-
-	writeLog(fmt.Sprintf("response_%s.log", timestamp), rawSSE.String())
 
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	for _, tc := range toolCalls {

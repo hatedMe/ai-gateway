@@ -24,7 +24,7 @@ var (
 func GetHTTPClient() *resty.Client {
 	clientOnce.Do(func() {
 		httpClient = resty.New().
-			SetTimeout(120 * time.Second).
+			SetTimeout(120*time.Second).
 			SetHeader("User-Agent", "Go-http-client/1.1").
 			SetHeader("Host", "console.enterprise.trae.cn").
 			SetDoNotParseResponse(true)
@@ -195,7 +195,13 @@ func ConvertClaudeToolsToTrae(claudeTools []any) []any {
 	for _, tool := range claudeTools {
 		if m, ok := tool.(map[string]any); ok {
 			if m["type"] == "function" {
-				if _, ok := m["function"].(map[string]any); ok {
+				if fn, ok := m["function"].(map[string]any); ok {
+					if params, ok := fn["parameters"]; ok {
+						if _, isStr := params.(string); !isStr {
+							schemaBytes, _ := json.Marshal(params)
+							fn["parameters"] = string(schemaBytes)
+						}
+					}
 					traeTools = append(traeTools, m)
 					continue
 				}
@@ -277,14 +283,25 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 						args, _ := fn["arguments"].(string)
 						id, _ := m["id"].(string)
 						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
-							"id": id,
+							"id":   id,
 							"type": "function",
-							"function": map[string]any{
-								"name": name,
+							"function_call": map[string]any{
+								"name":      name,
 								"arguments": args,
 							},
 						})
 					}
+				}
+			case []model.OpenAIToolCall:
+				for _, tcItem := range tc {
+					traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
+						"id":   tcItem.ID,
+						"type": "function",
+						"function_call": map[string]any{
+							"name":      tcItem.Function.Name,
+							"arguments": tcItem.Function.Arguments,
+						},
+					})
 				}
 			}
 		}
@@ -334,10 +351,10 @@ func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system an
 							traeMsg.ToolCalls = make([]map[string]any, 0)
 						}
 						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
-							"id": id,
+							"id":   id,
 							"type": "function",
-							"function": map[string]any{
-								"name": name,
+							"function_call": map[string]any{
+								"name":      name,
 								"arguments": string(inputJSON),
 							},
 						})

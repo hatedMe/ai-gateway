@@ -18,6 +18,19 @@ import (
 )
 
 func HandleModels(c *gin.Context) {
+	auth := c.GetHeader("Authorization")
+	if auth == "" {
+		auth = c.GetHeader("X-Api-Key")
+	}
+	auth = strings.TrimPrefix(auth, "Bearer ")
+	if auth == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization or X-Api-Key header is required"})
+		return
+	}
+
+	rid, _ := c.Get("requestID")
+	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+
 	type ModelItem struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
@@ -25,14 +38,36 @@ func HandleModels(c *gin.Context) {
 		OwnedBy string `json:"owned_by"`
 	}
 	var models []ModelItem
-	for name := range config.ModelMap {
-		models = append(models, ModelItem{
-			ID:      name,
-			Object:  "model",
-			Created: 1750118400,
-			OwnedBy: "trae",
-		})
+
+	traeConfigs, err := service.FetchTraeModels(auth)
+	if err != nil {
+		logger.Error(ctx, "[OpenAI] Fetch models error", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
+
+	for _, cfg := range traeConfigs {
+		if cfg.Usage == "chat_completion" {
+			models = append(models, ModelItem{
+				ID:      cfg.ConfigName,
+				Object:  "model",
+				Created: 1750118400,
+				OwnedBy: "trae",
+			})
+		}
+	}
+
+	if len(models) == 0 {
+		for name := range config.ModelMap {
+			models = append(models, ModelItem{
+				ID:      name,
+				Object:  "model",
+				Created: 1750118400,
+				OwnedBy: "trae",
+			})
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   models,
@@ -54,7 +89,13 @@ func HandleChatCompletions(c *gin.Context) {
 	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
 
 	var req model.OpenAIRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+		return
+	}
+	writeLog(fmt.Sprintf("openai_request_%s.json", rid), string(rawBody))
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -64,16 +105,14 @@ func HandleChatCompletions(c *gin.Context) {
 		return
 	}
 
-	reqJSON, _ := json.MarshalIndent(req, "", "  ")
-	timestamp := time.Now().Format("20060102_150405")
-	writeLog(fmt.Sprintf("openai_request_%s.json", timestamp), string(reqJSON))
+	logger.Info(ctx, "[OpenAI] Request received", "model", req.Model, "stream", req.Stream, "messages_count", len(req.Messages), "tools_count", len(req.Tools))
 
 	traeMessages, userInput := service.ConvertOpenAIMessagesToTrae(req.Messages)
 
-	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.FilterBlockedTools(req.Tools), userInput)
+	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(service.FilterBlockedTools(req.Tools)), userInput)
 
-	payloadJSON, _ := json.Marshal(traePayload)
-	logger.Info(ctx, "[OpenAI] Sending to Trae", "payload", string(payloadJSON))
+	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
+	writeLog(fmt.Sprintf("openai_payload_%s.json", rid), string(payloadJSON))
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
@@ -85,13 +124,13 @@ func HandleChatCompletions(c *gin.Context) {
 
 	defer resp.RawBody().Close()
 	if req.Stream {
-		handleOpenAIStream(c, resp.RawBody(), req.Model, timestamp)
+		handleOpenAIStream(c, resp.RawBody(), req.Model, rid.(string))
 	} else {
-		handleOpenAINonStream(c, resp.RawBody(), req.Model, timestamp)
+		handleOpenAINonStream(c, resp.RawBody(), req.Model)
 	}
 }
 
-func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
+func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, requestID string) {
 	rid, _ := c.Get("requestID")
 	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
 
@@ -100,11 +139,11 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 	c.Header("Connection", "keep-alive")
 
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
-	var rawSSE strings.Builder
+	var rawSSELog strings.Builder
 
 	c.Stream(func(w io.Writer) bool {
 		service.ReadTraeSSE(body, func(event string, dataStr string) bool {
-			rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
+			rawSSELog.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
 
 			if event == "error" {
 				var traeErr model.TraeError
@@ -151,6 +190,10 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 					j, _ := json.Marshal(chunk)
 					w.Write([]byte("data: " + string(j) + "\n\n"))
 				}
+			}
+
+			if event == "done" {
+				return false
 			}
 			return true
 		})
@@ -203,25 +246,20 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, ti
 		j, _ := json.Marshal(finishChunk)
 		w.Write([]byte("data: " + string(j) + "\n\n"))
 		w.Write([]byte("data: [DONE]\n\n"))
-		writeLog(fmt.Sprintf("openai_response_%s.log", timestamp), rawSSE.String())
+
+		writeLog(fmt.Sprintf("openai_raw_sse_%s.log", requestID), rawSSELog.String())
 		return false
 	})
 }
 
-func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string, timestamp string) {
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
-
+func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	var accumulatedResponse string
 	var accumulatedReasoning string
 	var toolCalls []model.TraeToolCall
 	var finishReason string
 	var usage model.OpenAIUsage
-	var rawSSE strings.Builder
 
 	service.ReadTraeSSE(body, func(event string, data string) bool {
-		logger.Debug(ctx, "Read SSE event", "event", event, "data", data)
-		rawSSE.WriteString(fmt.Sprintf("event: %s\ndata: %s\n", event, data))
 		switch event {
 		case "error":
 			var traeErr model.TraeError
@@ -253,8 +291,6 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string,
 		}
 		return true
 	})
-
-	writeLog(fmt.Sprintf("openai_response_%s.log", timestamp), rawSSE.String())
 
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	for _, tc := range toolCalls {
