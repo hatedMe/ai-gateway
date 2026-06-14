@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,19 +17,22 @@ import (
 	"github.com/google/uuid"
 )
 
-func writeLog(filename string, content string) {
+func writeLog(filename string, content []byte) {
 	if os.Getenv("DEBUG_REQUESTS") != "true" {
 		return
 	}
 	logsDir := "logs"
-	os.MkdirAll(logsDir, 0755)
-	f, err := os.Create(filepath.Join(logsDir, filename))
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		logger.Error(context.Background(), "[Log] Failed to create logs directory", "error", err)
+		return
+	}
+	f, err := os.Create(filepath.Join(logsDir, filepath.Base(filename)))
 	if err != nil {
-		fmt.Printf("[Log] Failed to create log file: %v\n", err)
+		logger.Error(context.Background(), "[Log] Failed to create log file", "error", err)
 		return
 	}
 	defer f.Close()
-	f.WriteString(content)
+	f.Write(content)
 }
 
 func HandleClaudeMessages(c *gin.Context) {
@@ -47,7 +51,7 @@ func HandleClaudeMessages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": "failed to read request body"}})
 		return
 	}
-	writeLog(fmt.Sprintf("claude_request_%s.json", rid), string(rawBody))
+	writeLog(fmt.Sprintf("claude_request_%s.json", rid), rawBody)
 	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": err.Error()}})
 		return
@@ -64,7 +68,7 @@ func HandleClaudeMessages(c *gin.Context) {
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(fmt.Sprintf("claude_payload_%s.json", rid), string(payloadJSON))
+	writeLog(fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {

@@ -97,7 +97,7 @@ func HandleChatCompletions(c *gin.Context) {
 		abortWithOpenAIError(c, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "")
 		return
 	}
-	writeLog(fmt.Sprintf("openai_request_%s.json", rid), string(rawBody))
+	writeLog(fmt.Sprintf("openai_request_%s.json", rid), rawBody)
 	if err := json.Unmarshal(rawBody, &req); err != nil {
 		abortWithOpenAIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "")
 		return
@@ -115,7 +115,7 @@ func HandleChatCompletions(c *gin.Context) {
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(service.FilterBlockedTools(req.Tools)), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(fmt.Sprintf("openai_payload_%s.json", rid), string(payloadJSON))
+	writeLog(fmt.Sprintf("openai_payload_%s.json", rid), payloadJSON)
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
@@ -126,14 +126,20 @@ func HandleChatCompletions(c *gin.Context) {
 	logger.Info(ctx, "[OpenAI] Response status", "status", resp.Status())
 
 	defer resp.RawBody().Close()
+		if resp.StatusCode() != 200 {
+			bodyBytes, _ := io.ReadAll(resp.RawBody())
+			logger.Error(ctx, "[OpenAI] Error response body", "body", string(bodyBytes))
+			abortWithOpenAIError(c, resp.StatusCode(), string(bodyBytes), "api_error", "")
+			return
+		}
 	if req.Stream {
-		handleOpenAIStream(c, resp.RawBody(), req.Model, rid)
+		handleOpenAIStream(c, resp.RawBody(), req.Model)
 	} else {
 		handleOpenAINonStream(c, resp.RawBody(), req.Model)
 	}
 }
 
-func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, requestID string) {
+func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	rid := GetRequestID(c)
 	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
@@ -269,7 +275,7 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 					flusher.Flush()
 				}
 	
-	writeLog(fmt.Sprintf("openai_raw_sse_%s.log", requestID), rawSSELog.String())
+	writeLog(fmt.Sprintf("openai_raw_sse_%s.log", rid), []byte(rawSSELog.String()))
 }
 
 func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string) {
