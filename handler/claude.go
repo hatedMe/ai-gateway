@@ -17,6 +17,9 @@ import (
 )
 
 func writeLog(filename string, content string) {
+	if os.Getenv("DEBUG_REQUESTS") != "true" {
+		return
+	}
 	logsDir := "logs"
 	os.MkdirAll(logsDir, 0755)
 	f, err := os.Create(filepath.Join(logsDir, filename))
