@@ -15,7 +15,7 @@ import (
 
 func setupTestConfig(t *testing.T) {
 	t.Helper()
-	content := "server:\n  port: 3000\ntrae:\n  headers:\n    X-App-Id: \"test-app-id\""
+	content := "server:\n  port: 3000\nauth:\n  tokens:\n    - \"Cloud-IDE-JWT real-token\"\n  app_keys:\n    - \"test-token\"\ntrae:\n  headers:\n    X-App-Id: \"test-app-id\""
 	tmpFile, err := os.CreateTemp("", "handler-test-*.yaml")
 	if err != nil {
 		t.Fatal(err)

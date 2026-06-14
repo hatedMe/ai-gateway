@@ -75,13 +75,19 @@ func HandleModels(c *gin.Context) {
 }
 
 func HandleChatCompletions(c *gin.Context) {
-	auth := c.GetHeader("Authorization")
-	if auth == "" {
-		auth = c.GetHeader("X-Api-Key")
+	appkey := c.GetHeader("Authorization")
+	if appkey == "" {
+		appkey = c.GetHeader("X-Api-Key")
 	}
-	auth = strings.TrimPrefix(auth, "Bearer ")
-	if auth == "" {
+	appkey = strings.TrimPrefix(appkey, "Bearer ")
+	if appkey == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization or X-Api-Key header is required"})
+		return
+	}
+
+	auth := config.GetRealToken(appkey)
+	if auth == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid appkey"})
 		return
 	}
 

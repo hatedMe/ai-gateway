@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"traecli-api-proxy/config"
 	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
 	"traecli-api-proxy/service"
@@ -30,13 +31,19 @@ func writeLog(filename string, content string) {
 }
 
 func HandleClaudeMessages(c *gin.Context) {
-	auth := c.GetHeader("Authorization")
-	if auth == "" {
-		auth = c.GetHeader("X-Api-Key")
+	appkey := c.GetHeader("Authorization")
+	if appkey == "" {
+		appkey = c.GetHeader("X-Api-Key")
 	}
-	auth = strings.TrimPrefix(auth, "Bearer ")
-	if auth == "" {
+	appkey = strings.TrimPrefix(appkey, "Bearer ")
+	if appkey == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "Authorization or X-Api-Key header is required"}})
+		return
+	}
+
+	auth := config.GetRealToken(appkey)
+	if auth == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "invalid appkey"}})
 		return
 	}
 

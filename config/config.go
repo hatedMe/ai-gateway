@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 
 	"github.com/goccy/go-yaml"
@@ -10,6 +11,7 @@ import (
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Trae   TraeConfig   `yaml:"trae"`
+	Auth   AuthConfig   `yaml:"auth"`
 }
 
 type ServerConfig struct {
@@ -18,6 +20,11 @@ type ServerConfig struct {
 
 type TraeConfig struct {
 	Headers map[string]string `yaml:"headers"`
+}
+
+type AuthConfig struct {
+	Tokens  []string `yaml:"tokens"`   // 真实 token 池，随机取一个转发
+	AppKeys []string `yaml:"app_keys"` // 允许访问的 appkey 白名单
 }
 
 type ModelConfig struct {
@@ -63,4 +70,20 @@ func GetModelConfig(name string) ModelConfig {
 		return cfg
 	}
 	return ModelConfig{ConfigName: name, ModelName: name + "__v2"}
+}
+
+// GetRealToken 校验 appkey 并随机返回一个真实 token，appkey 无效返回空字符串
+func GetRealToken(appkey string) string {
+	if Cfg == nil {
+		return ""
+	}
+	for _, k := range Cfg.Auth.AppKeys {
+		if k == appkey {
+			if len(Cfg.Auth.Tokens) == 0 {
+				return ""
+			}
+			return Cfg.Auth.Tokens[rand.Intn(len(Cfg.Auth.Tokens))]
+		}
+	}
+	return ""
 }

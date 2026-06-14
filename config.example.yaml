@@ -3,6 +3,16 @@ server:
     # 监听端口
     port: 8318
 
+# 认证配置
+# 客户端使用 appkey 调用 API，代理用真实 token 转发到 Trae，避免 token 泄露
+auth:
+    tokens:
+        - "Cloud-IDE-JWT <your-real-token-1>"
+        - "Cloud-IDE-JWT <your-real-token-2>"
+    app_keys:
+        - "<your-app-key-1>"
+        - "<your-app-key-2>"
+
 # Trae API 配置
 trae:
     # 请求头，按需配置
