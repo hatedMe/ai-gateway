@@ -18,6 +18,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// RequestIDMiddleware is a Gin middleware that extracts or generates a request ID,
+// sets it in the Gin context and response headers, and injects it into the standard
+// request context for use in downstream operations and logging.
 func RequestIDMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader("X-Request-ID")
@@ -26,6 +29,10 @@ func RequestIDMiddleware() gin.HandlerFunc {
 		}
 		c.Set("requestID", requestID)
 		c.Header("X-Request-ID", requestID)
+
+		ctx := logger.WithRequestID(c.Request.Context(), requestID)
+		c.Request = c.Request.WithContext(ctx)
+
 		c.Next()
 	}
 }
@@ -41,9 +48,20 @@ func main() {
 
 	r := gin.Default()
 	r.Use(RequestIDMiddleware())
-	r.POST("/v1/chat/completions", handler.HandleChatCompletions)
-	r.POST("/v1/messages", handler.HandleClaudeMessages)
-	r.GET("/v1/models", handler.HandleModels)
+	// Group for OpenAI-style endpoints
+	openaiGroup := r.Group("/v1")
+	openaiGroup.Use(handler.AuthMiddleware(false))
+	{
+		openaiGroup.POST("/chat/completions", handler.HandleChatCompletions)
+		openaiGroup.GET("/models", handler.HandleModels)
+	}
+
+	// Group for Claude-style endpoints
+	claudeGroup := r.Group("/v1")
+	claudeGroup.Use(handler.AuthMiddleware(true))
+	{
+		claudeGroup.POST("/messages", handler.HandleClaudeMessages)
+	}
 
 	port := config.Cfg.Server.Port
 	if port == 0 {
