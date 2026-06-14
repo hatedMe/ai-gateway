@@ -29,13 +29,14 @@ func writeLog(filename string, content string) {
 }
 
 func HandleClaudeMessages(c *gin.Context) {
-	auth := getAuthFromHeader(c, true)
+	auth := GetAuthFromContext(c)
 	if auth == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "Unauthorized"}})
 		return
 	}
 
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	var req model.ClaudeRequest
 	rawBody, err := io.ReadAll(c.Request.Body)
@@ -91,8 +92,8 @@ func writeSSE(c *gin.Context, eventType string, data any) {
 }
 
 func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")

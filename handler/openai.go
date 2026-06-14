@@ -17,14 +17,26 @@ import (
 	"github.com/google/uuid"
 )
 
+func abortWithOpenAIError(c *gin.Context, statusCode int, message string, errorType string, code string) {
+	c.JSON(statusCode, gin.H{
+		"error": map[string]string{
+			"message": message,
+			"type":    errorType,
+			"code":    code,
+		},
+	})
+	c.Abort()
+}
+
 func HandleModels(c *gin.Context) {
-	auth := getAuthFromHeader(c, false)
+	auth := GetAuthFromContext(c)
 	if auth == "" {
+		abortWithOpenAIError(c, http.StatusUnauthorized, "Unauthorized", "authentication_error", "")
 		return
 	}
 
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	type ModelItem struct {
 		ID      string `json:"id"`
@@ -37,7 +49,7 @@ func HandleModels(c *gin.Context) {
 	traeConfigs, err := service.FetchTraeModels(auth)
 	if err != nil {
 		logger.Error(ctx, "[OpenAI] Fetch models error", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		abortWithOpenAIError(c, http.StatusInternalServerError, err.Error(), "api_error", "")
 		return
 	}
 
@@ -70,28 +82,29 @@ func HandleModels(c *gin.Context) {
 }
 
 func HandleChatCompletions(c *gin.Context) {
-	auth := getAuthFromHeader(c, false)
+	auth := GetAuthFromContext(c)
 	if auth == "" {
+		abortWithOpenAIError(c, http.StatusUnauthorized, "Unauthorized", "authentication_error", "")
 		return
 	}
 
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	var req model.OpenAIRequest
 	rawBody, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+		abortWithOpenAIError(c, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "")
 		return
 	}
 	writeLog(fmt.Sprintf("openai_request_%s.json", rid), string(rawBody))
 	if err := json.Unmarshal(rawBody, &req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortWithOpenAIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "")
 		return
 	}
 
 	if req.Model == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "model is required"})
+		abortWithOpenAIError(c, http.StatusBadRequest, "model is required", "invalid_request_error", "")
 		return
 	}
 
@@ -107,22 +120,22 @@ func HandleChatCompletions(c *gin.Context) {
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
 		logger.Error(ctx, "[OpenAI] Request error", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		abortWithOpenAIError(c, http.StatusInternalServerError, err.Error(), "api_error", "")
 		return
 	}
 	logger.Info(ctx, "[OpenAI] Response status", "status", resp.Status())
 
 	defer resp.RawBody().Close()
 	if req.Stream {
-		handleOpenAIStream(c, resp.RawBody(), req.Model, rid.(string))
+		handleOpenAIStream(c, resp.RawBody(), req.Model, rid)
 	} else {
 		handleOpenAINonStream(c, resp.RawBody(), req.Model)
 	}
 }
 
 func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, requestID string) {
-	rid, _ := c.Get("requestID")
-	ctx := logger.WithRequestID(c.Request.Context(), rid.(string))
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
