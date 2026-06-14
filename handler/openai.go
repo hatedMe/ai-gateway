@@ -18,13 +18,8 @@ import (
 )
 
 func HandleModels(c *gin.Context) {
-	auth := c.GetHeader("Authorization")
+	auth := getAuthFromHeader(c, false)
 	if auth == "" {
-		auth = c.GetHeader("X-Api-Key")
-	}
-	auth = strings.TrimPrefix(auth, "Bearer ")
-	if auth == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization or X-Api-Key header is required"})
 		return
 	}
 
@@ -75,19 +70,8 @@ func HandleModels(c *gin.Context) {
 }
 
 func HandleChatCompletions(c *gin.Context) {
-	appkey := c.GetHeader("Authorization")
-	if appkey == "" {
-		appkey = c.GetHeader("X-Api-Key")
-	}
-	appkey = strings.TrimPrefix(appkey, "Bearer ")
-	if appkey == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization or X-Api-Key header is required"})
-		return
-	}
-
-	auth := config.GetRealToken(appkey)
+	auth := getAuthFromHeader(c, false)
 	if auth == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid appkey"})
 		return
 	}
 
@@ -147,9 +131,10 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	var rawSSELog strings.Builder
 
-	c.Stream(func(w io.Writer) bool {
-		service.ReadTraeSSE(body, func(event string, dataStr string) bool {
-			rawSSELog.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
+	flusher, ok := c.Writer.(http.Flusher)
+	
+	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+		rawSSELog.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
 
 			if event == "error" {
 				var traeErr model.TraeError
@@ -163,8 +148,14 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 					Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: model.OpenAIDelta{Content: traeErr.Error}}},
 				}
 				j, _ := json.Marshal(errChunk)
-				w.Write([]byte("data: " + string(j) + "\n\n"))
-				w.Write([]byte("data: [DONE]\n\n"))
+				c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+				if ok {
+					flusher.Flush()
+				}
+				c.Writer.Write([]byte("data: [DONE]\n\n"))
+				if ok {
+					flusher.Flush()
+				}
 				return false
 			}
 
@@ -194,7 +185,10 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 						Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: delta}},
 					}
 					j, _ := json.Marshal(chunk)
-					w.Write([]byte("data: " + string(j) + "\n\n"))
+					c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+				if ok {
+					flusher.Flush()
+				}
 				}
 			}
 
@@ -232,7 +226,10 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 				}},
 			}
 			j, _ := json.Marshal(chunk)
-			w.Write([]byte("data: " + string(j) + "\n\n"))
+			c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+				if ok {
+					flusher.Flush()
+				}
 		}
 
 		finishChunk := model.OpenAIChunk{
@@ -250,12 +247,16 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string, re
 			finishChunk.Choices[0].FinishReason = "tool_calls"
 		}
 		j, _ := json.Marshal(finishChunk)
-		w.Write([]byte("data: " + string(j) + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
-
-		writeLog(fmt.Sprintf("openai_raw_sse_%s.log", requestID), rawSSELog.String())
-		return false
-	})
+		c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+				if ok {
+					flusher.Flush()
+				}
+		c.Writer.Write([]byte("data: [DONE]\n\n"))
+				if ok {
+					flusher.Flush()
+				}
+	
+	writeLog(fmt.Sprintf("openai_raw_sse_%s.log", requestID), rawSSELog.String())
 }
 
 func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string) {
@@ -339,3 +340,9 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Usage:   usage,
 	})
 }
+
+
+
+
+
+

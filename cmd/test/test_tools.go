@@ -1,3 +1,4 @@
+//go:build ignore
 package main
 
 import (
@@ -45,3 +46,4 @@ func main() {
 		fmt.Println("\n❌ 测试失败：parameters 仍然是对象格式，或者转换出错。")
 	}
 }
+

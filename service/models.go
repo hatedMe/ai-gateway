@@ -1,11 +1,9 @@
 package service
 
 import (
-    "bytes"
     "encoding/json"
     "fmt"
     "io"
-    "net/http"
     "traecli-api-proxy/config"
 )
 
@@ -19,32 +17,28 @@ func FetchTraeModels(auth string) ([]TraeConfigInfo, error) {
         return nil, fmt.Errorf("config not loaded")
     }
 
-    reqBody := []byte("{\"function\":\"chat\"}")
-    req, err := http.NewRequest("POST", "https://console.enterprise.trae.cn/api/ide/v1/cli/get_config_list", bytes.NewBuffer(reqBody))
-    if err != nil {
-        return nil, fmt.Errorf("failed to create request: %w", err)
-    }
-
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", auth)
+    req := GetHTTPClient().R().
+        SetHeader("Content-Type", "application/json").
+        SetHeader("Authorization", auth).
+        SetBody(`{"function":"chat"}`)
 
     for k, v := range config.Cfg.Trae.Headers {
-        req.Header.Set(k, v)
+        req = req.SetHeader(k, v)
     }
 
-    resp, err := http.DefaultClient.Do(req)
+    resp, err := req.Post("https://console.enterprise.trae.cn/api/ide/v1/cli/get_config_list")
     if err != nil {
-        return nil, fmt.Errorf("failed to execute request: %w", err)
+        return nil, fmt.Errorf("failed to fetch models: %w", err)
     }
-    defer resp.Body.Close()
+    defer resp.RawBody().Close()
 
-    body, err := io.ReadAll(resp.Body)
+    body, err := io.ReadAll(resp.RawBody())
     if err != nil {
         return nil, fmt.Errorf("failed to read response body: %w", err)
     }
 
-    if resp.StatusCode >= 400 {
-        return nil, fmt.Errorf("failed to fetch models: status code %d, body: %s", resp.StatusCode, string(body))
+    if resp.StatusCode() >= 400 {
+        return nil, fmt.Errorf("failed to fetch models: status code %d, body: %s", resp.StatusCode(), string(body))
     }
 
     if len(body) == 0 {
@@ -81,3 +75,4 @@ func FetchTraeModels(auth string) ([]TraeConfigInfo, error) {
 
     return nil, fmt.Errorf("could not find config_info_list in response. body: %s", string(body))
 }
+

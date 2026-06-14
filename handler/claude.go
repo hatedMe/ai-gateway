@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"traecli-api-proxy/config"
 	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
 	"traecli-api-proxy/service"
@@ -31,19 +29,8 @@ func writeLog(filename string, content string) {
 }
 
 func HandleClaudeMessages(c *gin.Context) {
-	appkey := c.GetHeader("Authorization")
-	if appkey == "" {
-		appkey = c.GetHeader("X-Api-Key")
-	}
-	appkey = strings.TrimPrefix(appkey, "Bearer ")
-	if appkey == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "Authorization or X-Api-Key header is required"}})
-		return
-	}
-
-	auth := config.GetRealToken(appkey)
+	auth := getAuthFromHeader(c, true)
 	if auth == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": "invalid appkey"}})
 		return
 	}
 
@@ -83,14 +70,13 @@ func HandleClaudeMessages(c *gin.Context) {
 	}
 	logger.Info(ctx, "[Claude] Response status", "status", resp.Status())
 
+	defer resp.RawBody().Close()
 	if resp.StatusCode() != 200 {
 		bodyBytes, _ := io.ReadAll(resp.RawBody())
 		logger.Error(ctx, "[Claude] Error response body", "body", string(bodyBytes))
 		c.JSON(resp.StatusCode(), gin.H{"type": "error", "error": map[string]string{"type": "api_error", "message": string(bodyBytes)}})
 		return
 	}
-
-	defer resp.RawBody().Close()
 	if req.Stream {
 		handleClaudeStream(c, resp.RawBody(), req.Model)
 	} else {
@@ -366,3 +352,6 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Usage:      model.ClaudeUsage{InputTokens: inputTokens, OutputTokens: outputTokens},
 	})
 }
+
+
+
