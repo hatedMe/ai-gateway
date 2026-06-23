@@ -33,6 +33,7 @@ func setupRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		c.Set("requestID", "test-request-id")
+		c.Set(AuthKey, "Cloud-IDE-JWT real-token")
 		c.Next()
 	})
 	r.GET("/v1/models", HandleModels)
@@ -80,7 +81,14 @@ func TestHandleChatCompletions_ModelRequired(t *testing.T) {
 
 func TestHandleChatCompletions_NoAuth(t *testing.T) {
 	setupTestConfig(t)
-	r := setupRouter()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	// Skip setting AuthKey for testing NoAuth
+	r.Use(func(c *gin.Context) {
+		c.Set("requestID", "test-request-id")
+		c.Next()
+	})
+	r.POST("/v1/chat/completions", HandleChatCompletions)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/v1/chat/completions", strings.NewReader("{\"model\":\"glm-5.1\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"))
 	req.Header.Set("Content-Type", "application/json")

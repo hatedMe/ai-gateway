@@ -153,9 +153,9 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	flusher, ok := c.Writer.(http.Flusher)
 	
 	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
-		rawSSELog.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", event, dataStr))
+		fmt.Fprintf(&rawSSELog, "event: %s\ndata: %s\n\n", event, dataStr)
 
-			if event == "error" {
+		if event == "error" {
 				var traeErr model.TraeError
 				json.Unmarshal([]byte(dataStr), &traeErr)
 				logger.Error(ctx, "[OpenAI] Stream error event", "error", traeErr.Error)

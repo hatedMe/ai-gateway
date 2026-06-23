@@ -25,5 +25,7 @@ func GetRequestID(c *gin.Context) string {
 			return s
 		}
 	}
-	return uuid.New().String()
+	newRID := uuid.New().String()
+	c.Set("requestID", newRID)
+	return newRID
 }
