@@ -126,12 +126,12 @@ func HandleChatCompletions(c *gin.Context) {
 	logger.Info(ctx, "[OpenAI] Response status", "status", resp.Status())
 
 	defer resp.RawBody().Close()
-		if resp.StatusCode() != 200 {
-			bodyBytes, _ := io.ReadAll(resp.RawBody())
-			logger.Error(ctx, "[OpenAI] Error response body", "body", string(bodyBytes))
-			abortWithOpenAIError(c, resp.StatusCode(), string(bodyBytes), "api_error", "")
-			return
-		}
+	if resp.StatusCode() != 200 {
+		bodyBytes, _ := io.ReadAll(resp.RawBody())
+		logger.Error(ctx, "[OpenAI] Error response body", "body", string(bodyBytes))
+		abortWithOpenAIError(c, resp.StatusCode(), string(bodyBytes), "api_error", "")
+		return
+	}
 	if req.Stream {
 		handleOpenAIStream(c, resp.RawBody(), req.Model)
 	} else {
@@ -151,130 +151,130 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	var rawSSELog strings.Builder
 
 	flusher, ok := c.Writer.(http.Flusher)
-	
+
 	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
 		fmt.Fprintf(&rawSSELog, "event: %s\ndata: %s\n\n", event, dataStr)
 
 		if event == "error" {
-				var traeErr model.TraeError
-				json.Unmarshal([]byte(dataStr), &traeErr)
-				logger.Error(ctx, "[OpenAI] Stream error event", "error", traeErr.Error)
-				errChunk := model.OpenAIChunk{
-					ID:      "chatcmpl-" + uuid.New().String(),
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   modelName,
-					Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: model.OpenAIDelta{Content: traeErr.Error}}},
-				}
-				j, _ := json.Marshal(errChunk)
-				c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
-				if ok {
-					flusher.Flush()
-				}
-				c.Writer.Write([]byte("data: [DONE]\n\n"))
-				if ok {
-					flusher.Flush()
-				}
-				return false
-			}
-
-			if event == "output" {
-				var out model.TraeOutput
-				json.Unmarshal([]byte(dataStr), &out)
-
-				if len(out.ToolCalls) > 0 {
-					for _, tc := range out.ToolCalls {
-						service.AccumulateToolCall(toolCallsAcc, tc)
-					}
-				}
-
-				delta := model.OpenAIDelta{}
-				if out.Response != "" {
-					delta.Content = out.Response
-				}
-				if out.ReasoningContent != "" {
-					delta.ReasoningContent = out.ReasoningContent
-				}
-				if delta.Content != nil || delta.ReasoningContent != nil {
-					chunk := model.OpenAIChunk{
-						ID:      "chatcmpl-" + uuid.New().String(),
-						Object:  "chat.completion.chunk",
-						Created: time.Now().Unix(),
-						Model:   modelName,
-						Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: delta}},
-					}
-					j, _ := json.Marshal(chunk)
-					c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
-				if ok {
-					flusher.Flush()
-				}
-				}
-			}
-
-			if event == "done" {
-				return false
-			}
-			return true
-		})
-
-		// Send accumulated tool calls and final [DONE]
-		if len(toolCallsAcc) > 0 {
-			toolCalls := make([]model.OpenAIToolCall, 0)
-			for i := 0; i < len(toolCallsAcc); i++ {
-				if tc, ok := toolCallsAcc[i]; ok {
-					toolCalls = append(toolCalls, model.OpenAIToolCall{
-						Index: i,
-						ID:    tc.ID,
-						Type:  "function",
-						Function: model.OpenAIToolCallFunction{
-							Name:      tc.Name,
-							Arguments: tc.Arguments,
-						},
-					})
-				}
-			}
-			chunk := model.OpenAIChunk{
+			var traeErr model.TraeError
+			json.Unmarshal([]byte(dataStr), &traeErr)
+			logger.Error(ctx, "[OpenAI] Stream error event", "error", traeErr.Error)
+			errChunk := model.OpenAIChunk{
 				ID:      "chatcmpl-" + uuid.New().String(),
 				Object:  "chat.completion.chunk",
 				Created: time.Now().Unix(),
 				Model:   modelName,
-				Choices: []model.OpenAIChunkChoice{{
-					Index:        0,
-					Delta:        model.OpenAIDelta{ToolCalls: toolCalls},
-					FinishReason: nil,
-				}},
+				Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: model.OpenAIDelta{Content: traeErr.Error}}},
 			}
-			j, _ := json.Marshal(chunk)
+			j, _ := json.Marshal(errChunk)
 			c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+			if ok {
+				flusher.Flush()
+			}
+			c.Writer.Write([]byte("data: [DONE]\n\n"))
+			if ok {
+				flusher.Flush()
+			}
+			return false
+		}
+
+		if event == "output" {
+			var out model.TraeOutput
+			json.Unmarshal([]byte(dataStr), &out)
+
+			if len(out.ToolCalls) > 0 {
+				for _, tc := range out.ToolCalls {
+					service.AccumulateToolCall(toolCallsAcc, tc)
+				}
+			}
+
+			delta := model.OpenAIDelta{}
+			if out.Response != "" {
+				delta.Content = out.Response
+			}
+			if out.ReasoningContent != "" {
+				delta.ReasoningContent = out.ReasoningContent
+			}
+			if delta.Content != nil || delta.ReasoningContent != nil {
+				chunk := model.OpenAIChunk{
+					ID:      "chatcmpl-" + uuid.New().String(),
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   modelName,
+					Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: delta}},
+				}
+				j, _ := json.Marshal(chunk)
+				c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
 				if ok {
 					flusher.Flush()
 				}
+			}
 		}
 
-		finishChunk := model.OpenAIChunk{
+		if event == "done" {
+			return false
+		}
+		return true
+	})
+
+	// Send accumulated tool calls and final [DONE]
+	if len(toolCallsAcc) > 0 {
+		toolCalls := make([]model.OpenAIToolCall, 0)
+		for i := 0; i < len(toolCallsAcc); i++ {
+			if tc, ok := toolCallsAcc[i]; ok {
+				toolCalls = append(toolCalls, model.OpenAIToolCall{
+					Index: i,
+					ID:    tc.ID,
+					Type:  "function",
+					Function: model.OpenAIToolCallFunction{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		chunk := model.OpenAIChunk{
 			ID:      "chatcmpl-" + uuid.New().String(),
 			Object:  "chat.completion.chunk",
 			Created: time.Now().Unix(),
 			Model:   modelName,
 			Choices: []model.OpenAIChunkChoice{{
 				Index:        0,
-				Delta:        model.OpenAIDelta{},
-				FinishReason: "stop",
+				Delta:        model.OpenAIDelta{ToolCalls: toolCalls},
+				FinishReason: nil,
 			}},
 		}
-		if len(toolCallsAcc) > 0 {
-			finishChunk.Choices[0].FinishReason = "tool_calls"
-		}
-		j, _ := json.Marshal(finishChunk)
+		j, _ := json.Marshal(chunk)
 		c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
-				if ok {
-					flusher.Flush()
-				}
-		c.Writer.Write([]byte("data: [DONE]\n\n"))
-				if ok {
-					flusher.Flush()
-				}
-	
+		if ok {
+			flusher.Flush()
+		}
+	}
+
+	finishChunk := model.OpenAIChunk{
+		ID:      "chatcmpl-" + uuid.New().String(),
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   modelName,
+		Choices: []model.OpenAIChunkChoice{{
+			Index:        0,
+			Delta:        model.OpenAIDelta{},
+			FinishReason: "stop",
+		}},
+	}
+	if len(toolCallsAcc) > 0 {
+		finishChunk.Choices[0].FinishReason = "tool_calls"
+	}
+	j, _ := json.Marshal(finishChunk)
+	c.Writer.Write([]byte("data: " + string(j) + "\n\n"))
+	if ok {
+		flusher.Flush()
+	}
+	c.Writer.Write([]byte("data: [DONE]\n\n"))
+	if ok {
+		flusher.Flush()
+	}
+
 	writeLog(fmt.Sprintf("openai_raw_sse_%s.log", rid), []byte(rawSSELog.String()))
 }
 
@@ -359,9 +359,3 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Usage:   usage,
 	})
 }
-
-
-
-
-
-

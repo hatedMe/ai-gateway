@@ -47,7 +47,7 @@ func TestHandleModels(t *testing.T) {
 	r := setupRouter()
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/v1/models", nil)
-    req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer test-token")
 	r.ServeHTTP(w, req)
 }
 

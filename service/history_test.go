@@ -33,9 +33,9 @@ func TestConvertClaudeMessagesToTrae_ToolHistory(t *testing.T) {
 			Role: "user",
 			Content: []interface{}{
 				map[string]interface{}{
-					"type":         "tool_result",
-					"tool_use_id":  "call_123",
-					"content":      "Sunny, 25C",
+					"type":        "tool_result",
+					"tool_use_id": "call_123",
+					"content":     "Sunny, 25C",
 				},
 			},
 		},
@@ -61,10 +61,10 @@ func TestConvertClaudeMessagesToTrae_ToolHistory(t *testing.T) {
 							name := block["name"].(string)
 							args, _ := json.Marshal(block["input"])
 							traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]interface{}{
-								"id": id,
+								"id":   id,
 								"type": "function",
 								"function": map[string]interface{}{
-									"name": name,
+									"name":      name,
 									"arguments": string(args),
 								},
 							})

@@ -1,4 +1,5 @@
 //go:build ignore
+
 package main
 
 import (
@@ -39,11 +40,10 @@ func main() {
 	// 检查 parameters 是否成功转成了字符串
 	traeJSONStr := string(traeJSON)
 	fmt.Println(traeJSONStr)
-	
+
 	if strings.Contains(traeJSONStr, "\"parameters\": \"{\\\"properties\\\":") {
 		fmt.Println("\n✅ 测试通过：parameters 已成功转为 JSON 字符串。")
 	} else {
 		fmt.Println("\n❌ 测试失败：parameters 仍然是对象格式，或者转换出错。")
 	}
 }
-

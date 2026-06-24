@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-
 func abortWithAuthError(c *gin.Context, isClaude bool, msg string) {
 	if isClaude {
 		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": msg}})
@@ -46,4 +45,3 @@ func AuthMiddleware(isClaude bool) gin.HandlerFunc {
 		c.Next()
 	}
 }
-

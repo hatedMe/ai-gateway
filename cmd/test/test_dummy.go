@@ -1,4 +1,5 @@
 //go:build ignore
-package main
-func testdummy() {}
 
+package main
+
+func testdummy() {}

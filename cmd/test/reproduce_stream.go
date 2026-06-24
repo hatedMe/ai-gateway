@@ -1,4 +1,5 @@
 //go:build ignore
+
 package main
 
 import (
@@ -52,4 +53,3 @@ func main() {
 	}
 	fmt.Printf("\n===== Full Response Body =====\n%s\n===== End =====\n", string(bodyBytes))
 }
-

@@ -360,6 +360,3 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		Usage:      model.ClaudeUsage{InputTokens: inputTokens, OutputTokens: outputTokens},
 	})
 }
-
-
-

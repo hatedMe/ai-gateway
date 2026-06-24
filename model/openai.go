@@ -16,10 +16,10 @@ type OpenAIMessage struct {
 }
 
 type OpenAIToolCall struct {
-	Index    int                     `json:"index"`
-	ID       string                  `json:"id"`
-	Type     string                  `json:"type"`
-	Function OpenAIToolCallFunction  `json:"function"`
+	Index    int                    `json:"index"`
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function OpenAIToolCallFunction `json:"function"`
 }
 
 type OpenAIToolCallFunction struct {
