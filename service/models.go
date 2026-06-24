@@ -50,27 +50,18 @@ func FetchTraeModels(auth string) ([]TraeConfigInfo, error) {
 		ConfigInfoList []TraeConfigInfo `json:"config_info_list"`
 	}
 
+	if err := json.Unmarshal(body, &traeResp); err == nil && len(traeResp.ConfigInfoList) > 0 {
+		return traeResp.ConfigInfoList, nil
+	}
+
 	var traeRespData struct {
 		Data struct {
 			ConfigInfoList []TraeConfigInfo `json:"config_info_list"`
 		} `json:"data"`
 	}
 
-	if err := json.Unmarshal(body, &traeResp); err == nil && len(traeResp.ConfigInfoList) > 0 {
-		return traeResp.ConfigInfoList, nil
-	}
-
 	if err := json.Unmarshal(body, &traeRespData); err == nil && len(traeRespData.Data.ConfigInfoList) > 0 {
 		return traeRespData.Data.ConfigInfoList, nil
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse models response: %w. body: %s", err, string(body))
-	}
-
-	if traeResp.ConfigInfoList != nil {
-		return traeResp.ConfigInfoList, nil
 	}
 
 	return nil, fmt.Errorf("could not find config_info_list in response. body: %s", string(body))

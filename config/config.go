@@ -2,9 +2,8 @@ package config
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
-	"time"
 
 	"github.com/goccy/go-yaml"
 )
@@ -35,11 +34,6 @@ type ModelConfig struct {
 }
 
 var Cfg *Config
-var rng *rand.Rand
-
-func init() {
-	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
-}
 
 const TargetURL = "https://console.enterprise.trae.cn/api/ide/v2/llm_raw_chat"
 
@@ -100,7 +94,7 @@ func GetRealToken(appkey string) string {
 			if len(Cfg.Auth.Tokens) == 0 {
 				return ""
 			}
-			return Cfg.Auth.Tokens[rng.Intn(len(Cfg.Auth.Tokens))]
+			return Cfg.Auth.Tokens[rand.IntN(len(Cfg.Auth.Tokens))]
 		}
 	}
 	return ""
