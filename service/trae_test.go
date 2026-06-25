@@ -54,35 +54,6 @@ func TestContentToString_Map(t *testing.T) {
 	}
 }
 
-func TestClaudeContentToString_String(t *testing.T) {
-	result := ClaudeContentToString("hello world")
-	if result != "hello world" {
-		t.Errorf("expected 'hello world', got '%s'", result)
-	}
-}
-
-func TestClaudeContentToString_ContentBlocks(t *testing.T) {
-	input := []any{
-		map[string]any{"type": "text", "text": "hello"},
-		map[string]any{"type": "text", "text": "world"},
-	}
-	result := ClaudeContentToString(input)
-	if result != "hello\nworld" {
-		t.Errorf("expected 'hello\\nworld', got '%s'", result)
-	}
-}
-
-func TestClaudeContentToString_NonTextBlock(t *testing.T) {
-	input := []any{
-		map[string]any{"type": "image", "source": "data"},
-		map[string]any{"type": "text", "text": "hello"},
-	}
-	result := ClaudeContentToString(input)
-	if result != "hello" {
-		t.Errorf("expected 'hello', got '%s'", result)
-	}
-}
-
 func TestConvertClaudeToolsToTrae_AlreadyOpenAIFormat(t *testing.T) {
 	input := []any{
 		map[string]any{

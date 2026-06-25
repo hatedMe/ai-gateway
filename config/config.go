@@ -15,8 +15,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	DebugLog bool `yaml:"debug_log"`
-	Port     int  `yaml:"port"`
+	Port int `yaml:"port"`
 }
 
 type TraeConfig struct {

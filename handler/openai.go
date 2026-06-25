@@ -112,7 +112,7 @@ func HandleChatCompletions(c *gin.Context) {
 
 	traeMessages, userInput := service.ConvertOpenAIMessagesToTrae(req.Messages)
 
-	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(service.FilterBlockedTools(req.Tools)), userInput)
+	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
 	writeLog(fmt.Sprintf("openai_payload_%s.json", rid), payloadJSON)
@@ -153,6 +153,11 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	flusher, ok := c.Writer.(http.Flusher)
 
 	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+		// 客户端断开则停止读取上游，避免空转浪费 token
+		if c.Request.Context().Err() != nil {
+			return false
+		}
+
 		fmt.Fprintf(&rawSSELog, "event: %s\ndata: %s\n\n", event, dataStr)
 
 		if event == "error" {

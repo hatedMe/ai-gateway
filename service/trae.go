@@ -95,101 +95,6 @@ func ContentToString(content any) string {
 	}
 }
 
-func ClaudeContentToString(content any) string {
-	switch v := content.(type) {
-	case string:
-		return v
-	case []any:
-		var parts []string
-		for _, item := range v {
-			if block, ok := item.(map[string]any); ok {
-				switch block["type"] {
-				case "text":
-					if text, ok := block["text"].(string); ok {
-						parts = append(parts, text)
-					}
-				case "tool_use":
-					name, _ := block["name"].(string)
-					id, _ := block["id"].(string)
-					inputJSON, _ := json.Marshal(block["input"])
-					parts = append(parts, fmt.Sprintf("[Tool Use: %s (id: %s) Input: %s]", name, id, string(inputJSON)))
-				case "tool_result":
-					id, _ := block["tool_use_id"].(string)
-					var resultContent string
-					if rc, ok := block["content"].([]any); ok {
-						var rcParts []string
-						for _, rcItem := range rc {
-							if rcBlock, ok := rcItem.(map[string]any); ok {
-								if rcBlock["type"] == "text" {
-									if text, ok := rcBlock["text"].(string); ok {
-										rcParts = append(rcParts, text)
-									}
-								}
-							}
-						}
-						resultContent = strings.Join(rcParts, "\n")
-					} else if text, ok := block["content"].(string); ok {
-						resultContent = text
-					}
-					isError, _ := block["is_error"].(bool)
-					errMark := ""
-					if isError {
-						errMark = " (ERROR)"
-					}
-					parts = append(parts, fmt.Sprintf("[Tool Result%s (id: %s): %s]", errMark, id, resultContent))
-				}
-			}
-		}
-		return strings.Join(parts, "\n")
-	default:
-		j, _ := json.Marshal(v)
-		return string(j)
-	}
-}
-
-func FilterBlockedTools(tools []any) []any {
-	return tools
-}
-
-func OpenAIContentToString(content any, toolCalls any, role string) string {
-	var parts []string
-
-	if toolCalls != nil {
-		switch tc := toolCalls.(type) {
-		case []any:
-			for _, item := range tc {
-				if m, ok := item.(map[string]any); ok {
-					fn, _ := m["function"].(map[string]any)
-					name, _ := fn["name"].(string)
-					args, _ := fn["arguments"].(string)
-					id, _ := m["id"].(string)
-					parts = append(parts, fmt.Sprintf("[Tool Use: %s (id: %s) Input: %s]", name, id, args))
-				}
-			}
-		case []model.OpenAIToolCall:
-			for _, tcItem := range tc {
-				parts = append(parts, fmt.Sprintf("[Tool Use: %s (id: %s) Input: %s]", tcItem.Function.Name, tcItem.ID, tcItem.Function.Arguments))
-			}
-		}
-	}
-
-	if content != nil {
-		switch v := content.(type) {
-		case string:
-			if v != "" {
-				parts = append(parts, v)
-			}
-		default:
-			j, _ := json.Marshal(v)
-			if string(j) != "null" && string(j) != `""` {
-				parts = append(parts, string(j))
-			}
-		}
-	}
-
-	return strings.Join(parts, "\n")
-}
-
 func ConvertClaudeToolsToTrae(claudeTools []any) []any {
 	var traeTools []any
 	for _, tool := range claudeTools {
@@ -285,7 +190,7 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
 							"id":   id,
 							"type": "function",
-							"function_call": map[string]any{
+							"function": map[string]any{
 								"name":      name,
 								"arguments": args,
 							},
@@ -297,7 +202,7 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 					traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
 						"id":   tcItem.ID,
 						"type": "function",
-						"function_call": map[string]any{
+						"function": map[string]any{
 							"name":      tcItem.Function.Name,
 							"arguments": tcItem.Function.Arguments,
 						},
@@ -353,7 +258,7 @@ func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system an
 						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
 							"id":   id,
 							"type": "function",
-							"function_call": map[string]any{
+							"function": map[string]any{
 								"name":      name,
 								"arguments": string(inputJSON),
 							},
@@ -391,9 +296,7 @@ func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system an
 			contentStr = strings.Join(parts, "\n")
 		}
 
-		if contentStr != "" || len(traeMsg.ToolCalls) == 0 {
-			traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
-		}
+		traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
 
 		traeMessages = append(traeMessages, traeMsg)
 		if i == len(claudeMessages)-1 && msg.Role == "user" {

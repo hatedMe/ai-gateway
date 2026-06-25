@@ -65,7 +65,7 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	traeMessages, userInput := service.ConvertClaudeMessagesToTrae(req.Messages, req.System)
 
-	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(service.FilterBlockedTools(req.Tools)), userInput)
+	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
 	writeLog(fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
@@ -129,6 +129,10 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	nextBlockIndex := 2
 
 	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+		// 客户端断开则停止读取上游，避免空转浪费 token
+		if c.Request.Context().Err() != nil {
+			return false
+		}
 
 		switch event {
 		case "error":

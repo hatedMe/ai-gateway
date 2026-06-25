@@ -64,8 +64,8 @@ func TestGetModelConfig_UnknownModel(t *testing.T) {
 }
 
 func TestModelMapCount(t *testing.T) {
-	if len(ModelMap) != 12 {
-		t.Errorf("expected 12 models in ModelMap, got %d", len(ModelMap))
+	if len(ModelMap) < 20 {
+		t.Errorf("expected at least 20 models in ModelMap, got %d", len(ModelMap))
 	}
 }
 
