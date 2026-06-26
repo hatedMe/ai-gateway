@@ -25,18 +25,27 @@ var (
 
 func GetHTTPClient() *resty.Client {
 	clientOnce.Do(func() {
+		timeout := 300
+		maxIdle := 100
+		retry := 2
+		if config.Cfg != nil && config.Cfg.HTTP.TimeoutSeconds > 0 {
+			timeout = config.Cfg.HTTP.TimeoutSeconds
+			maxIdle = config.Cfg.HTTP.MaxIdleConns
+			retry = config.Cfg.HTTP.RetryCount
+		}
+
 		transport := &http.Transport{
-			MaxIdleConns:        100,
+			MaxIdleConns:        maxIdle,
 			MaxIdleConnsPerHost: 20,
 			IdleConnTimeout:     90 * time.Second,
 		}
 		httpClient = resty.New().
-			SetTimeout(300*time.Second).
+			SetTimeout(time.Duration(timeout)*time.Second).
 			SetHeader("User-Agent", "Go-http-client/1.1").
 			SetHeader("Host", "console.enterprise.trae.cn").
 			SetDoNotParseResponse(true).
 			SetTransport(transport).
-			SetRetryCount(2).
+			SetRetryCount(retry).
 			SetRetryWaitTime(500 * time.Millisecond).
 			SetRetryMaxWaitTime(2 * time.Second)
 	})
@@ -241,7 +250,7 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 	return traeMessages, userInput
 }
 
-func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system any) ([]model.TraeMessage, string) {
+func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system any) ([]model.TraeMessage, string, error) {
 	traeMessages := []model.TraeMessage{}
 	if system != nil {
 		systemStr := ContentToString(system)
@@ -250,76 +259,108 @@ func ConvertClaudeMessagesToTrae(claudeMessages []model.ClaudeMessage, system an
 
 	var userInput string
 	for i, msg := range claudeMessages {
-		traeMsg := model.TraeMessage{Role: msg.Role}
-
-		contentStr := ""
-		switch v := msg.Content.(type) {
-		case string:
-			contentStr = v
-		case []any:
-			var parts []string
-			for _, item := range v {
-				if block, ok := item.(map[string]any); ok {
-					switch block["type"] {
-					case "text":
-						if text, ok := block["text"].(string); ok {
-							parts = append(parts, text)
-						}
-					case "tool_use":
-						name, _ := block["name"].(string)
-						id, _ := block["id"].(string)
-						inputJSON, _ := json.Marshal(block["input"])
-
-						if traeMsg.ToolCalls == nil {
-							traeMsg.ToolCalls = make([]map[string]any, 0)
-						}
-						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
-							"id":   id,
-							"type": "function",
-							"function": map[string]any{
-								"name":      name,
-								"arguments": string(inputJSON),
-							},
-						})
-					case "tool_result":
-						traeMsg.Role = "tool"
-						id, _ := block["tool_use_id"].(string)
-						traeMsg.ToolCallID = id
-
-						var resultContent string
-						if rc, ok := block["content"].([]any); ok {
-							var rcParts []string
-							for _, rcItem := range rc {
-								if rcBlock, ok := rcItem.(map[string]any); ok {
-									if rcBlock["type"] == "text" {
-										if text, ok := rcBlock["text"].(string); ok {
-											rcParts = append(rcParts, text)
-										}
-									}
-								}
-							}
-							resultContent = strings.Join(rcParts, "\n")
-						} else if text, ok := block["content"].(string); ok {
-							resultContent = text
-						}
-
-						isError, _ := block["is_error"].(bool)
-						if isError {
-							resultContent = "ERROR: " + resultContent
-						}
-						parts = append(parts, resultContent)
-					}
-				}
-			}
-			contentStr = strings.Join(parts, "\n")
+		traeMsg, err := parseClaudeMessage(msg)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to parse message at index %d: %w", i, err)
 		}
-
-		traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
 
 		traeMessages = append(traeMessages, traeMsg)
 		if i == len(claudeMessages)-1 && msg.Role == "user" {
-			userInput = contentStr
+			// Extract user input from text content, assuming it's the first text block for now
+			// Or more robustly extract from the parsed content
+			userInput = traeMsg.Content[0].Text
 		}
 	}
-	return traeMessages, userInput
+	return traeMessages, userInput, nil
+}
+
+func parseClaudeMessage(msg model.ClaudeMessage) (model.TraeMessage, error) {
+	traeMsg := model.TraeMessage{Role: msg.Role}
+	contentStr := ""
+
+	switch v := msg.Content.(type) {
+	case string:
+		contentStr = v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			block, ok := item.(map[string]any)
+			if !ok {
+				return traeMsg, fmt.Errorf("invalid content block type")
+			}
+
+			switch block["type"] {
+			case "text":
+				text, ok := block["text"].(string)
+				if !ok {
+					return traeMsg, fmt.Errorf("invalid text block")
+				}
+				parts = append(parts, text)
+
+			case "tool_use":
+				name, _ := block["name"].(string)
+				id, _ := block["id"].(string)
+				inputJSON, err := json.Marshal(block["input"])
+				if err != nil {
+					return traeMsg, fmt.Errorf("failed to marshal tool input: %w", err)
+				}
+
+				if traeMsg.ToolCalls == nil {
+					traeMsg.ToolCalls = make([]map[string]any, 0)
+				}
+				traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
+					"id":   id,
+					"type": "function",
+					"function": map[string]any{
+						"name":      name,
+						"arguments": string(inputJSON),
+					},
+				})
+			case "tool_result":
+				traeMsg.Role = "tool"
+				id, _ := block["tool_use_id"].(string)
+				traeMsg.ToolCallID = id
+
+				resultContent, err := parseToolResultContent(block["content"])
+				if err != nil {
+					return traeMsg, fmt.Errorf("failed to parse tool result: %w", err)
+				}
+
+				isError, _ := block["is_error"].(bool)
+				if isError {
+					resultContent = "ERROR: " + resultContent
+				}
+				parts = append(parts, resultContent)
+			}
+		}
+		contentStr = strings.Join(parts, "\n")
+	default:
+		return traeMsg, fmt.Errorf("unsupported content type: %T", v)
+	}
+
+	traeMsg.Content = []model.TraeContent{{Type: "text", Text: contentStr}}
+	return traeMsg, nil
+}
+
+func parseToolResultContent(content any) (string, error) {
+	switch rc := content.(type) {
+	case []any:
+		var rcParts []string
+		for _, rcItem := range rc {
+			rcBlock, ok := rcItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if rcBlock["type"] == "text" {
+				if text, ok := rcBlock["text"].(string); ok {
+					rcParts = append(rcParts, text)
+				}
+			}
+		}
+		return strings.Join(rcParts, "\n"), nil
+	case string:
+		return rc, nil
+	default:
+		return "", fmt.Errorf("unsupported tool result content type: %T", content)
+	}
 }

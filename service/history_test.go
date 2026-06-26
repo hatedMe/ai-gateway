@@ -39,7 +39,10 @@ func TestConvertClaudeMessagesToTrae_ToolHistory(t *testing.T) {
 		},
 	}
 
-	result, userInput := ConvertClaudeMessagesToTrae(messages, nil)
+	result, userInput, err := ConvertClaudeMessagesToTrae(messages, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// 1. 三条消息全部转换
 	if len(result) != 3 {
@@ -95,7 +98,10 @@ func TestConvertClaudeMessagesToTrae_ToolResultIsError(t *testing.T) {
 		},
 	}
 
-	result, _ := ConvertClaudeMessagesToTrae(messages, nil)
+	result, _, err := ConvertClaudeMessagesToTrae(messages, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if result[0].Role != "tool" {
 		t.Fatalf("expected role tool, got %s", result[0].Role)

@@ -78,7 +78,12 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	logger.Info(ctx, "[Claude] Request received", "model", req.Model, "stream", req.Stream, "messages_count", len(req.Messages), "tools_count", len(req.Tools))
 
-	traeMessages, userInput := service.ConvertClaudeMessagesToTrae(req.Messages, req.System)
+	traeMessages, userInput, err := service.ConvertClaudeMessagesToTrae(req.Messages, req.System)
+	if err != nil {
+		logger.Error(ctx, "[Claude] Convert messages error", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": err.Error()}})
+		return
+	}
 
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
@@ -254,14 +259,6 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 			}
 
 			if len(toolCallsAcc) > 0 {
-				var indices []int
-				for idx := range toolCallsAcc {
-					indices = append(indices, idx)
-				}
-				// Sort indices (though map keys in this context are usually processed in order, sorting ensures correct sequence)
-				// In Go 1.21+, you could use slices.Sort(indices). For broader compatibility, implement simple bubble sort or just process map.
-				// Since we know the length is small, let's just collect and sort.
-				// Or simply use a loop up to max index.
 				maxIdx := -1
 				for idx := range toolCallsAcc {
 					if idx > maxIdx {

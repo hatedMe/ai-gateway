@@ -10,14 +10,14 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-type Config struct {
-	Server ServerConfig `yaml:"server"`
-	Trae   TraeConfig   `yaml:"trae"`
-	Auth   AuthConfig   `yaml:"auth"`
-}
-
 type ServerConfig struct {
 	Port int `yaml:"port"`
+}
+
+type HTTPConfig struct {
+	TimeoutSeconds int `yaml:"timeout_seconds"`
+	MaxIdleConns   int `yaml:"max_idle_conns"`
+	RetryCount     int `yaml:"retry_count"`
 }
 
 type TraeConfig struct {
@@ -29,13 +29,20 @@ type AuthConfig struct {
 	AppKeys []string `yaml:"app_keys"` // 允许访问的 appkey 白名单
 }
 
+type Config struct {
+	Server ServerConfig `yaml:"server"`
+	Trae   TraeConfig   `yaml:"trae"`
+	Auth   AuthConfig   `yaml:"auth"`
+	HTTP   HTTPConfig   `yaml:"http"` // 添加 HTTP 配置
+}
+
 type ModelConfig struct {
 	ConfigName string
 	ModelName  string
 }
 
 var (
-	Cfg *Config
+	Cfg      *Config
 	cfgMutex sync.RWMutex
 )
 
