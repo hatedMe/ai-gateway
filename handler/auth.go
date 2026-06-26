@@ -9,11 +9,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type ClaudeErrorResponse struct {
+	Type  string            `json:"type"`
+	Error map[string]string `json:"error"`
+}
+
+type OpenAIErrorResponse struct {
+	Error map[string]string `json:"error"`
+}
+
 func abortWithAuthError(c *gin.Context, isClaude bool, msg string) {
 	if isClaude {
-		c.JSON(http.StatusUnauthorized, gin.H{"type": "error", "error": map[string]string{"type": "authentication_error", "message": msg}})
+		c.JSON(http.StatusUnauthorized, ClaudeErrorResponse{
+			Type: "error",
+			Error: map[string]string{
+				"type":    "authentication_error",
+				"message": msg,
+			},
+		})
 	} else {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": msg})
+		c.JSON(http.StatusUnauthorized, OpenAIErrorResponse{
+			Error: map[string]string{
+				"type":    "authentication_error",
+				"message": msg,
+			},
+		})
 	}
 	c.Abort()
 }
@@ -25,8 +45,8 @@ func AuthMiddleware(isClaude bool) gin.HandlerFunc {
 			appkey = c.GetHeader("X-Api-Key")
 		}
 
-		if len(appkey) >= 7 && strings.EqualFold(appkey[:7], "Bearer ") {
-			appkey = appkey[7:]
+		if len(appkey) >= 7 && (strings.HasPrefix(appkey, "Bearer ") || strings.HasPrefix(appkey, "bearer ")) {
+			appkey = strings.TrimSpace(appkey[7:])
 		}
 
 		if appkey == "" {

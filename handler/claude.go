@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
@@ -18,20 +19,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// logsDirInitialized 用于一次性初始化 logs 目录
-var logsDirInitialized = false
+var (
+	logsDirOnce sync.Once
+)
 
 // ensureLogsDir 初始化 logs 目录（仅执行一次）
 func ensureLogsDir(ctx context.Context) {
-	if logsDirInitialized {
-		return
-	}
-	logsDir := "logs"
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		logger.Error(ctx, "[Log] Failed to create logs directory", "error", err)
-		return
-	}
-	logsDirInitialized = true
+	logsDirOnce.Do(func() {
+		logsDir := "logs"
+		if err := os.MkdirAll(logsDir, 0755); err != nil {
+			logger.Error(ctx, "[Log] Failed to create logs directory", "error", err)
+			return
+		}
+	})
 }
 
 func writeLog(ctx context.Context, filename string, content []byte) {
@@ -254,7 +254,21 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 			}
 
 			if len(toolCallsAcc) > 0 {
-				for i := 0; i < len(toolCallsAcc); i++ {
+				var indices []int
+				for idx := range toolCallsAcc {
+					indices = append(indices, idx)
+				}
+				// Sort indices (though map keys in this context are usually processed in order, sorting ensures correct sequence)
+				// In Go 1.21+, you could use slices.Sort(indices). For broader compatibility, implement simple bubble sort or just process map.
+				// Since we know the length is small, let's just collect and sort.
+				// Or simply use a loop up to max index.
+				maxIdx := -1
+				for idx := range toolCallsAcc {
+					if idx > maxIdx {
+						maxIdx = idx
+					}
+				}
+				for i := 0; i <= maxIdx; i++ {
 					if tc, ok := toolCallsAcc[i]; ok {
 						logger.Info(ctx, "[Claude] Tool call", "id", tc.ID, "name", tc.Name, "arguments", tc.Arguments)
 						toolIndex := nextBlockIndex
@@ -378,7 +392,13 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 	if accumulatedResponse != "" {
 		content = append(content, model.ClaudeContentBlock{Type: "text", Text: accumulatedResponse})
 	}
-	for i := 0; i < len(toolCallsAcc); i++ {
+	maxIdx := -1
+	for idx := range toolCallsAcc {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	for i := 0; i <= maxIdx; i++ {
 		if tc, ok := toolCallsAcc[i]; ok {
 			var input map[string]any
 			if err := json.Unmarshal([]byte(tc.Arguments), &input); err != nil {

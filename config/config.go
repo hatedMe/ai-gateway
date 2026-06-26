@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"sync"
 
 	"github.com/goccy/go-yaml"
 )
@@ -33,7 +34,10 @@ type ModelConfig struct {
 	ModelName  string
 }
 
-var Cfg *Config
+var (
+	Cfg *Config
+	cfgMutex sync.RWMutex
+)
 
 const TargetURL = "https://console.enterprise.trae.cn/api/ide/v2/llm_raw_chat"
 
@@ -69,10 +73,14 @@ func Load(path string) error {
 		return fmt.Errorf("read config file: %w", err)
 	}
 
-	Cfg = &Config{}
-	if err := yaml.Unmarshal(data, Cfg); err != nil {
+	newCfg := &Config{}
+	if err := yaml.Unmarshal(data, newCfg); err != nil {
 		return fmt.Errorf("parse config file: %w", err)
 	}
+
+	cfgMutex.Lock()
+	Cfg = newCfg
+	cfgMutex.Unlock()
 
 	return nil
 }
@@ -86,15 +94,21 @@ func GetModelConfig(name string) ModelConfig {
 
 // GetRealToken 校验 appkey 并随机返回一个真实 token，appkey 无效返回空字符串
 func GetRealToken(appkey string) string {
+	cfgMutex.RLock()
+	defer cfgMutex.RUnlock()
+
 	if Cfg == nil {
 		return ""
 	}
+
+	if len(Cfg.Auth.Tokens) == 0 {
+		return ""
+	}
+
+	appkeyBytes := []byte(appkey)
 	for _, k := range Cfg.Auth.AppKeys {
 		// 常量时间比较，防止时序攻击推测 appkey
-		if subtle.ConstantTimeCompare([]byte(k), []byte(appkey)) == 1 {
-			if len(Cfg.Auth.Tokens) == 0 {
-				return ""
-			}
+		if subtle.ConstantTimeCompare([]byte(k), appkeyBytes) == 1 {
 			return Cfg.Auth.Tokens[rand.IntN(len(Cfg.Auth.Tokens))]
 		}
 	}

@@ -233,7 +233,13 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	// Send accumulated tool calls and final [DONE]
 	if len(toolCallsAcc) > 0 {
 		toolCalls := make([]model.OpenAIToolCall, 0)
-		for i := 0; i < len(toolCallsAcc); i++ {
+		maxIdx := -1
+		for idx := range toolCallsAcc {
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		for i := 0; i <= maxIdx; i++ {
 			if tc, ok := toolCallsAcc[i]; ok {
 				toolCalls = append(toolCalls, model.OpenAIToolCall{
 					Index: i,
@@ -356,7 +362,13 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 	}
 	if len(toolCallsAcc) > 0 {
 		openaiToolCalls := make([]model.OpenAIToolCall, 0)
-		for i := 0; i < len(toolCallsAcc); i++ {
+		maxIdx := -1
+		for idx := range toolCallsAcc {
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		for i := 0; i <= maxIdx; i++ {
 			if tc, ok := toolCallsAcc[i]; ok {
 				openaiToolCalls = append(openaiToolCalls, model.OpenAIToolCall{
 					Index: i,

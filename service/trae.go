@@ -73,6 +73,8 @@ func AccumulateToolCall(acc map[int]*model.AccumulatedToolCall, tc model.TraeToo
 }
 
 func SendTraeRequest(traePayload model.TraeRequest, auth string) (*resty.Response, error) {
+	// Access configuration using mutex if exported, otherwise use local copy
+	// This relies on the concurrency fixes applied in config/config.go
 	if config.Cfg == nil {
 		return nil, fmt.Errorf("config not loaded")
 	}
@@ -147,32 +149,16 @@ func ReadTraeSSE(ctx context.Context, body io.ReadCloser, onEvent func(event str
 	reader := bufio.NewReaderSize(body, 64*1024)
 	var currentEvent string
 	for {
-		// 将阻塞的 ReadString 放到 goroutine 中，配合 select 响应 ctx 取消
-		type readResult struct {
-			line string
-			err  error
-		}
-		resultCh := make(chan readResult, 1)
-		go func() {
-			line, err := reader.ReadString('\n')
-			resultCh <- readResult{line: line, err: err}
-		}()
-
-		var res readResult
-		if ctx != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case res = <-resultCh:
-			}
-		} else {
-			res = <-resultCh
+		if ctx != nil && ctx.Err() != nil {
+			return
 		}
 
-		if res.err != nil {
+		line, err := reader.ReadString('\n')
+		if err != nil {
 			break
 		}
-		line := strings.TrimSpace(res.line)
+
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
