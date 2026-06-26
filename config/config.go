@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -89,7 +90,8 @@ func GetRealToken(appkey string) string {
 		return ""
 	}
 	for _, k := range Cfg.Auth.AppKeys {
-		if k == appkey {
+		// 常量时间比较，防止时序攻击推测 appkey
+		if subtle.ConstantTimeCompare([]byte(k), []byte(appkey)) == 1 {
 			if len(Cfg.Auth.Tokens) == 0 {
 				return ""
 			}

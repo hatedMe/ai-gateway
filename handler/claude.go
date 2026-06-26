@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"traecli-api-proxy/logger"
 	"traecli-api-proxy/model"
@@ -17,22 +18,36 @@ import (
 	"github.com/google/uuid"
 )
 
-func writeLog(filename string, content []byte) {
-	if os.Getenv("DEBUG_REQUESTS") != "true" {
+// logsDirInitialized 用于一次性初始化 logs 目录
+var logsDirInitialized = false
+
+// ensureLogsDir 初始化 logs 目录（仅执行一次）
+func ensureLogsDir(ctx context.Context) {
+	if logsDirInitialized {
 		return
 	}
 	logsDir := "logs"
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		logger.Error(context.Background(), "[Log] Failed to create logs directory", "error", err)
+		logger.Error(ctx, "[Log] Failed to create logs directory", "error", err)
 		return
 	}
-	f, err := os.Create(filepath.Join(logsDir, filepath.Base(filename)))
+	logsDirInitialized = true
+}
+
+func writeLog(ctx context.Context, filename string, content []byte) {
+	if os.Getenv("DEBUG_REQUESTS") != "true" {
+		return
+	}
+	ensureLogsDir(ctx)
+	f, err := os.Create(filepath.Join("logs", filepath.Base(filename)))
 	if err != nil {
-		logger.Error(context.Background(), "[Log] Failed to create log file", "error", err)
+		logger.Error(ctx, "[Log] Failed to create log file", "error", err)
 		return
 	}
 	defer f.Close()
-	f.Write(content)
+	if _, err := f.Write(content); err != nil {
+		logger.Error(ctx, "[Log] Failed to write log file", "error", err)
+	}
 }
 
 func HandleClaudeMessages(c *gin.Context) {
@@ -46,12 +61,12 @@ func HandleClaudeMessages(c *gin.Context) {
 	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	var req model.ClaudeRequest
-	rawBody, err := io.ReadAll(c.Request.Body)
+	rawBody, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": "failed to read request body"}})
 		return
 	}
-	writeLog(fmt.Sprintf("claude_request_%s.json", rid), rawBody)
+	writeLog(ctx, fmt.Sprintf("claude_request_%s.json", rid), rawBody)
 	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": map[string]string{"type": "invalid_request_error", "message": err.Error()}})
 		return
@@ -68,7 +83,7 @@ func HandleClaudeMessages(c *gin.Context) {
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
+	writeLog(ctx, fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
@@ -81,8 +96,8 @@ func HandleClaudeMessages(c *gin.Context) {
 	defer resp.RawBody().Close()
 	if resp.StatusCode() != 200 {
 		bodyBytes, _ := io.ReadAll(resp.RawBody())
-		logger.Error(ctx, "[Claude] Error response body", "body", string(bodyBytes))
-		c.JSON(resp.StatusCode(), gin.H{"type": "error", "error": map[string]string{"type": "api_error", "message": string(bodyBytes)}})
+		logger.Error(ctx, "[Claude] Error response body", "status", resp.StatusCode(), "body", string(bodyBytes))
+		c.JSON(resp.StatusCode(), gin.H{"type": "error", "error": map[string]string{"type": "api_error", "message": fmt.Sprintf("upstream returned status %d", resp.StatusCode())}})
 		return
 	}
 	if req.Stream {
@@ -128,7 +143,7 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	nextBlockIndex := 2
 
-	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+	service.ReadTraeSSE(ctx, body, func(event string, dataStr string) bool {
 		// 客户端断开则停止读取上游，避免空转浪费 token
 		if c.Request.Context().Err() != nil {
 			return false
@@ -137,7 +152,9 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 		switch event {
 		case "error":
 			var traeErr model.TraeError
-			json.Unmarshal([]byte(dataStr), &traeErr)
+			if err := json.Unmarshal([]byte(dataStr), &traeErr); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal stream error event failed", "error", err, "data", dataStr)
+			}
 			logger.Error(ctx, "[Claude] Stream error event", "error", traeErr.Error)
 			if !textBlockStarted {
 				writeSSE(c, "content_block_start", model.ClaudeStreamContentBlockStart{
@@ -163,7 +180,9 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 
 		case "output":
 			var out model.TraeOutput
-			json.Unmarshal([]byte(dataStr), &out)
+			if err := json.Unmarshal([]byte(dataStr), &out); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal stream output event failed", "error", err, "data", dataStr)
+			}
 
 			if out.ReasoningContent != "" {
 				if !thinkingBlockStarted {
@@ -216,12 +235,16 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 
 		case "token_usage":
 			var tu model.TraeTokenUsage
-			json.Unmarshal([]byte(dataStr), &tu)
+			if err := json.Unmarshal([]byte(dataStr), &tu); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal stream token_usage event failed", "error", err, "data", dataStr)
+			}
 			outputTokens = tu.CompletionTokens
 
 		case "done":
 			var doneData model.TraeDone
-			json.Unmarshal([]byte(dataStr), &doneData)
+			if err := json.Unmarshal([]byte(dataStr), &doneData); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal stream done event failed", "error", err, "data", dataStr)
+			}
 
 			if thinkingBlockStarted {
 				writeSSE(c, "content_block_stop", model.ClaudeStreamContentBlockStop{Type: "content_block_stop", Index: thinkingIndex})
@@ -278,18 +301,23 @@ func handleClaudeStream(c *gin.Context, body io.ReadCloser, modelName string) {
 }
 
 func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string) {
-	var accumulatedResponse string
-	var accumulatedReasoning string
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
+
+	var respBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	var inputTokens int
 	var outputTokens int
 	var toolCalls []model.TraeToolCall
 	var finishReason string
 
-	service.ReadTraeSSE(body, func(event string, data string) bool {
+	service.ReadTraeSSE(ctx, body, func(event string, data string) bool {
 		switch event {
 		case "error":
 			var traeErr model.TraeError
-			json.Unmarshal([]byte(data), &traeErr)
+			if err := json.Unmarshal([]byte(data), &traeErr); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal nonstream error event failed", "error", err, "data", data)
+			}
 			c.JSON(http.StatusOK, model.ClaudeResponse{
 				ID:         "msg_" + uuid.New().String(),
 				Type:       "message",
@@ -301,20 +329,26 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 			return false
 		case "output":
 			var out model.TraeOutput
-			json.Unmarshal([]byte(data), &out)
-			accumulatedResponse += out.Response
-			accumulatedReasoning += out.ReasoningContent
+			if err := json.Unmarshal([]byte(data), &out); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal nonstream output event failed", "error", err, "data", data)
+			}
+			respBuilder.WriteString(out.Response)
+			reasoningBuilder.WriteString(out.ReasoningContent)
 			if len(out.ToolCalls) > 0 {
 				toolCalls = append(toolCalls, out.ToolCalls...)
 			}
 		case "token_usage":
 			var tu model.TraeTokenUsage
-			json.Unmarshal([]byte(data), &tu)
+			if err := json.Unmarshal([]byte(data), &tu); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal nonstream token_usage event failed", "error", err, "data", data)
+			}
 			inputTokens = tu.PromptTokens
 			outputTokens = tu.CompletionTokens
 		case "done":
 			var doneData model.TraeDone
-			json.Unmarshal([]byte(data), &doneData)
+			if err := json.Unmarshal([]byte(data), &doneData); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal nonstream done event failed", "error", err, "data", data)
+			}
 			finishReason = doneData.FinishReason
 		}
 		return true
@@ -330,6 +364,9 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 		stopReason = "tool_use"
 	}
 
+	accumulatedResponse := respBuilder.String()
+	accumulatedReasoning := reasoningBuilder.String()
+
 	content := []model.ClaudeContentBlock{}
 	if accumulatedReasoning != "" {
 		content = append(content, model.ClaudeContentBlock{
@@ -344,7 +381,9 @@ func handleClaudeNonStream(c *gin.Context, body io.ReadCloser, modelName string)
 	for i := 0; i < len(toolCallsAcc); i++ {
 		if tc, ok := toolCallsAcc[i]; ok {
 			var input map[string]any
-			json.Unmarshal([]byte(tc.Arguments), &input)
+			if err := json.Unmarshal([]byte(tc.Arguments), &input); err != nil {
+				logger.Warn(ctx, "[Claude] unmarshal tool arguments failed", "error", err, "arguments", tc.Arguments)
+			}
 			content = append(content, model.ClaudeContentBlock{
 				Type:  "tool_use",
 				ID:    tc.ID,

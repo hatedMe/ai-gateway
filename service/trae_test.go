@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -138,7 +139,7 @@ func TestReadTraeSSE(t *testing.T) {
 
 	var events []string
 	var datas []string
-	ReadTraeSSE(body, func(event string, data string) bool {
+	ReadTraeSSE(context.Background(), body, func(event string, data string) bool {
 		events = append(events, event)
 		datas = append(datas, data)
 		return true
@@ -166,7 +167,7 @@ func TestReadTraeSSE_StopEarly(t *testing.T) {
 	body := io.NopCloser(strings.NewReader(sseData))
 
 	count := 0
-	ReadTraeSSE(body, func(event string, data string) bool {
+	ReadTraeSSE(context.Background(), body, func(event string, data string) bool {
 		count++
 		return false
 	})
@@ -181,7 +182,7 @@ func TestReadTraeSSE_EmptyData(t *testing.T) {
 	body := io.NopCloser(strings.NewReader(sseData))
 
 	count := 0
-	ReadTraeSSE(body, func(event string, data string) bool {
+	ReadTraeSSE(context.Background(), body, func(event string, data string) bool {
 		count++
 		return true
 	})

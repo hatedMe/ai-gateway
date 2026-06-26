@@ -92,12 +92,12 @@ func HandleChatCompletions(c *gin.Context) {
 	ctx := logger.WithRequestID(c.Request.Context(), rid)
 
 	var req model.OpenAIRequest
-	rawBody, err := io.ReadAll(c.Request.Body)
+	rawBody, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20))
 	if err != nil {
 		abortWithOpenAIError(c, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "")
 		return
 	}
-	writeLog(fmt.Sprintf("openai_request_%s.json", rid), rawBody)
+	writeLog(ctx, fmt.Sprintf("openai_request_%s.json", rid), rawBody)
 	if err := json.Unmarshal(rawBody, &req); err != nil {
 		abortWithOpenAIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "")
 		return
@@ -115,7 +115,7 @@ func HandleChatCompletions(c *gin.Context) {
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
 	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(fmt.Sprintf("openai_payload_%s.json", rid), payloadJSON)
+	writeLog(ctx, fmt.Sprintf("openai_payload_%s.json", rid), payloadJSON)
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
@@ -128,8 +128,8 @@ func HandleChatCompletions(c *gin.Context) {
 	defer resp.RawBody().Close()
 	if resp.StatusCode() != 200 {
 		bodyBytes, _ := io.ReadAll(resp.RawBody())
-		logger.Error(ctx, "[OpenAI] Error response body", "body", string(bodyBytes))
-		abortWithOpenAIError(c, resp.StatusCode(), string(bodyBytes), "api_error", "")
+		logger.Error(ctx, "[OpenAI] Error response body", "status", resp.StatusCode(), "body", string(bodyBytes))
+		abortWithOpenAIError(c, resp.StatusCode(), fmt.Sprintf("upstream returned status %d", resp.StatusCode()), "api_error", "")
 		return
 	}
 	if req.Stream {
@@ -147,12 +147,16 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
+	// 同一响应内所有 chunk 共享同一 ID（OpenAI 协议要求）
+	chunkID := "chatcmpl-" + uuid.New().String()
+	created := time.Now().Unix()
+
 	toolCallsAcc := map[int]*model.AccumulatedToolCall{}
 	var rawSSELog strings.Builder
 
 	flusher, ok := c.Writer.(http.Flusher)
 
-	service.ReadTraeSSE(body, func(event string, dataStr string) bool {
+	service.ReadTraeSSE(ctx, body, func(event string, dataStr string) bool {
 		// 客户端断开则停止读取上游，避免空转浪费 token
 		if c.Request.Context().Err() != nil {
 			return false
@@ -162,12 +166,14 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 
 		if event == "error" {
 			var traeErr model.TraeError
-			json.Unmarshal([]byte(dataStr), &traeErr)
+			if err := json.Unmarshal([]byte(dataStr), &traeErr); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal stream error event failed", "error", err, "data", dataStr)
+			}
 			logger.Error(ctx, "[OpenAI] Stream error event", "error", traeErr.Error)
 			errChunk := model.OpenAIChunk{
-				ID:      "chatcmpl-" + uuid.New().String(),
+				ID:      chunkID,
 				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
+				Created: created,
 				Model:   modelName,
 				Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: model.OpenAIDelta{Content: traeErr.Error}}},
 			}
@@ -185,7 +191,9 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 
 		if event == "output" {
 			var out model.TraeOutput
-			json.Unmarshal([]byte(dataStr), &out)
+			if err := json.Unmarshal([]byte(dataStr), &out); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal stream output event failed", "error", err, "data", dataStr)
+			}
 
 			if len(out.ToolCalls) > 0 {
 				for _, tc := range out.ToolCalls {
@@ -202,9 +210,9 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 			}
 			if delta.Content != nil || delta.ReasoningContent != nil {
 				chunk := model.OpenAIChunk{
-					ID:      "chatcmpl-" + uuid.New().String(),
+					ID:      chunkID,
 					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
+					Created: created,
 					Model:   modelName,
 					Choices: []model.OpenAIChunkChoice{{Index: 0, Delta: delta}},
 				}
@@ -239,9 +247,9 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 			}
 		}
 		chunk := model.OpenAIChunk{
-			ID:      "chatcmpl-" + uuid.New().String(),
+			ID:      chunkID,
 			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
+			Created: created,
 			Model:   modelName,
 			Choices: []model.OpenAIChunkChoice{{
 				Index:        0,
@@ -257,9 +265,9 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 	}
 
 	finishChunk := model.OpenAIChunk{
-		ID:      "chatcmpl-" + uuid.New().String(),
+		ID:      chunkID,
 		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
+		Created: created,
 		Model:   modelName,
 		Choices: []model.OpenAIChunkChoice{{
 			Index:        0,
@@ -280,21 +288,26 @@ func handleOpenAIStream(c *gin.Context, body io.ReadCloser, modelName string) {
 		flusher.Flush()
 	}
 
-	writeLog(fmt.Sprintf("openai_raw_sse_%s.log", rid), []byte(rawSSELog.String()))
+	writeLog(ctx, fmt.Sprintf("openai_raw_sse_%s.log", rid), []byte(rawSSELog.String()))
 }
 
 func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string) {
-	var accumulatedResponse string
-	var accumulatedReasoning string
+	rid := GetRequestID(c)
+	ctx := logger.WithRequestID(c.Request.Context(), rid)
+
+	var respBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	var toolCalls []model.TraeToolCall
 	var finishReason string
 	var usage model.OpenAIUsage
 
-	service.ReadTraeSSE(body, func(event string, data string) bool {
+	service.ReadTraeSSE(ctx, body, func(event string, data string) bool {
 		switch event {
 		case "error":
 			var traeErr model.TraeError
-			json.Unmarshal([]byte(data), &traeErr)
+			if err := json.Unmarshal([]byte(data), &traeErr); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal nonstream error event failed", "error", err, "data", data)
+			}
 			c.JSON(http.StatusOK, model.OpenAIResponse{
 				ID:      "chatcmpl-" + uuid.New().String(),
 				Object:  "chat.completion",
@@ -305,19 +318,25 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 			return false
 		case "output":
 			var out model.TraeOutput
-			json.Unmarshal([]byte(data), &out)
-			accumulatedResponse += out.Response
-			accumulatedReasoning += out.ReasoningContent
+			if err := json.Unmarshal([]byte(data), &out); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal nonstream output event failed", "error", err, "data", data)
+			}
+			respBuilder.WriteString(out.Response)
+			reasoningBuilder.WriteString(out.ReasoningContent)
 			if len(out.ToolCalls) > 0 {
 				toolCalls = append(toolCalls, out.ToolCalls...)
 			}
 		case "token_usage":
 			var tu model.TraeTokenUsage
-			json.Unmarshal([]byte(data), &tu)
+			if err := json.Unmarshal([]byte(data), &tu); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal nonstream token_usage event failed", "error", err, "data", data)
+			}
 			usage = model.OpenAIUsage{PromptTokens: tu.PromptTokens, CompletionTokens: tu.CompletionTokens, TotalTokens: tu.TotalTokens}
 		case "done":
 			var doneData model.TraeDone
-			json.Unmarshal([]byte(data), &doneData)
+			if err := json.Unmarshal([]byte(data), &doneData); err != nil {
+				logger.Warn(ctx, "[OpenAI] unmarshal nonstream done event failed", "error", err, "data", data)
+			}
 			finishReason = doneData.FinishReason
 		}
 		return true
@@ -327,6 +346,9 @@ func handleOpenAINonStream(c *gin.Context, body io.ReadCloser, modelName string)
 	for _, tc := range toolCalls {
 		service.AccumulateToolCall(toolCallsAcc, tc)
 	}
+
+	accumulatedResponse := respBuilder.String()
+	accumulatedReasoning := reasoningBuilder.String()
 
 	message := model.OpenAIMessage{Role: "assistant", Content: accumulatedResponse}
 	if accumulatedReasoning != "" {

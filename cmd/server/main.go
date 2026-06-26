@@ -65,7 +65,7 @@ func main() {
 
 	port := config.Cfg.Server.Port
 	if port == 0 {
-		port = 3000
+		port = 8318
 	}
 
 	srv := &http.Server{

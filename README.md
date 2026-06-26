@@ -7,12 +7,8 @@
 ```
 traecli-api-proxy/
 ├── cmd/
-│   ├── server/
-│   │   └── main.go              # 入口：加载配置、注册路由、启动服务
-│   └── test/
-│       ├── reproduce_stream.go  # 直连 Trae API 测试脚本
-│       ├── test_dummy.go        # 临时测试辅助
-│       └── test_tools.go        # 工具调用测试辅助
+│   └── server/
+│       └── main.go              # 入口：加载配置、注册路由、启动服务
 ├── config/
 │   ├── config.go                # 配置层：模型映射、常量（TargetURL）、appkey/token 校验
 │   └── config_test.go           # 配置层单元测试
@@ -32,7 +28,7 @@ traecli-api-proxy/
 │   ├── trae_test.go             # 业务层单元测试
 │   └── history_test.go          # 业务层历史用例测试
 ├── logger/
-│   └── logger.go                # 日志层：slog 封装，支持 request_id 透传
+│   └── logger.go                # 日志层：slog 封装，支持 request_id 透传，LOG_LEVEL 可配置
 ├── docs/                        # 设计文档与历史方案
 ├── logs/                        # 请求/响应日志（不纳入版本控制）
 ├── config.yaml                  # 运行时配置（不纳入版本控制）
@@ -94,7 +90,7 @@ trae:
 
 | 配置项             | 说明                                                              |
 | ------------------ | ----------------------------------------------------------------- |
-| `server.port`      | 代理服务监听端口，未配置时 fallback 为 `3000`                     |
+| `server.port`      | 代理服务监听端口，未配置时 fallback 为 `8318`                     |
 | `auth.tokens`      | 真实 Trae token 池（格式 `Cloud-IDE-JWT <jwt>`），转发时随机选一个 |
 | `auth.app_keys`    | 允许客户端使用的 appkey 白名单                                    |
 | `trae.headers`     | 发往 Trae API 的额外请求头                                        |
@@ -167,11 +163,9 @@ go test ./handler/... -v
 
 | 包        | 测试数 | 覆盖内容                                                                                                                                                                        |
 | --------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config`  | 7      | Load 配置解析、TargetURL 常量、GetModelConfig 已知/未知模型、ModelMap 数量（**当前失败，期望 12 实际 23，待同步**）、文件不存在、Headers 读取                                    |
+| `config`  | 7      | Load 配置解析、TargetURL 常量、GetModelConfig 已知/未知模型、ModelMap 数量（≥20）、文件不存在、Headers 读取                                    |
 | `handler` | 5      | /v1/models 完整响应（远端 401 时回退本地）、OpenAI/Claude 请求参数校验、无认证 401 校验                                                                                         |
-| `service` | 16     | ContentToString（String/Nil/Map）、ClaudeContentToString（String/ContentBlocks/NonTextBlock）、ConvertClaudeToolsToTrae（OpenAI 格式/Claude 格式/空名/nil）、ReadTraeSSE（正常/提前停止/空数据）、BuildTraeRequest、AccumulateToolCall、ConvertClaudeMessagesToTrae_ToolHistory |
-
-> 已知失败：`config/config_test.go:67` 的 `TestModelMapCount` 仍断言 `12`，但 `ModelMap` 已扩展到 23 项，需同步更新断言值。
+| `service` | 11     | ContentToString（String/Nil/Map）、ConvertClaudeToolsToTrae（OpenAI 格式/Claude 格式/空名/nil）、ReadTraeSSE（正常/提前停止/空数据）、BuildTraeRequest、AccumulateToolCall、ConvertClaudeMessagesToTrae_ToolHistory |
 
 ## API 接口
 
@@ -315,6 +309,6 @@ curl http://localhost:8318/v1/models \
 | `openai_payload_<rid>.json`      | 转换后发往 Trae 的 payload            |
 | `openai_raw_sse_<rid>.log`       | OpenAI 流式响应中 Trae 返回的原始 SSE |
 
-运行时日志（非请求 dump）通过 `logger` 包输出到 stdout，基于 `log/slog`，自动附带 `request_id` 字段，便于串联单次请求的全链路日志。
+运行时日志（非请求 dump）通过 `logger` 包输出到 stdout，基于 `log/slog`，自动附带 `request_id` 字段，便于串联单次请求的全链路日志。日志级别可通过环境变量 `LOG_LEVEL` 控制，可选值 `debug`（默认）/`info`/`warn`/`error`。
 
 `logs/` 目录已加入 `.gitignore`，不会纳入版本控制。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 type contextKey string
@@ -13,8 +14,22 @@ const requestIDKey contextKey = "requestID"
 var defaultLogger *slog.Logger
 
 func init() {
+	level := slog.LevelDebug
+	// 通过环境变量 LOG_LEVEL 控制日志级别（debug/info/warn/error）
+	if env := os.Getenv("LOG_LEVEL"); env != "" {
+		switch strings.ToLower(env) {
+		case "debug":
+			level = slog.LevelDebug
+		case "info":
+			level = slog.LevelInfo
+		case "warn", "warning":
+			level = slog.LevelWarn
+		case "error":
+			level = slog.LevelError
+		}
+	}
 	defaultLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: level,
 	}))
 }
 

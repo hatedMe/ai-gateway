@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"traecli-api-proxy/config"
+	"traecli-api-proxy/logger"
 )
 
 type TraeConfigInfo struct {
@@ -52,6 +54,8 @@ func FetchTraeModels(auth string) ([]TraeConfigInfo, error) {
 
 	if err := json.Unmarshal(body, &traeResp); err == nil && len(traeResp.ConfigInfoList) > 0 {
 		return traeResp.ConfigInfoList, nil
+	} else if err != nil {
+		logger.Warn(context.Background(), "[models] unmarshal top-level config_info_list failed", "error", err)
 	}
 
 	var traeRespData struct {
@@ -62,6 +66,8 @@ func FetchTraeModels(auth string) ([]TraeConfigInfo, error) {
 
 	if err := json.Unmarshal(body, &traeRespData); err == nil && len(traeRespData.Data.ConfigInfoList) > 0 {
 		return traeRespData.Data.ConfigInfoList, nil
+	} else if err != nil {
+		logger.Warn(context.Background(), "[models] unmarshal nested data.config_info_list failed", "error", err)
 	}
 
 	return nil, fmt.Errorf("could not find config_info_list in response. body: %s", string(body))

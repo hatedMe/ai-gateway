@@ -2,9 +2,11 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -23,11 +25,20 @@ var (
 
 func GetHTTPClient() *resty.Client {
 	clientOnce.Do(func() {
+		transport := &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
+		}
 		httpClient = resty.New().
-			SetTimeout(120*time.Second).
+			SetTimeout(300*time.Second).
 			SetHeader("User-Agent", "Go-http-client/1.1").
 			SetHeader("Host", "console.enterprise.trae.cn").
-			SetDoNotParseResponse(true)
+			SetDoNotParseResponse(true).
+			SetTransport(transport).
+			SetRetryCount(2).
+			SetRetryWaitTime(500 * time.Millisecond).
+			SetRetryMaxWaitTime(2 * time.Second)
 	})
 	return httpClient
 }
@@ -132,10 +143,18 @@ func ConvertClaudeToolsToTrae(claudeTools []any) []any {
 	return traeTools
 }
 
-func ReadTraeSSE(body io.ReadCloser, onEvent func(event string, data string) bool) {
-	reader := bufio.NewReader(body)
+func ReadTraeSSE(ctx context.Context, body io.ReadCloser, onEvent func(event string, data string) bool) {
+	reader := bufio.NewReaderSize(body, 64*1024)
 	var currentEvent string
 	for {
+		// 在每次读取前检查 context 是否已取消（客户端断开等）
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break
