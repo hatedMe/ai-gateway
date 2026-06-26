@@ -217,7 +217,7 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 						traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
 							"id":   id,
 							"type": "function",
-							"function": map[string]any{
+							"function_call": map[string]any{
 								"name":      name,
 								"arguments": args,
 							},
@@ -229,7 +229,7 @@ func ConvertOpenAIMessagesToTrae(openaiMessages []model.OpenAIMessage) ([]model.
 					traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
 						"id":   tcItem.ID,
 						"type": "function",
-						"function": map[string]any{
+						"function_call": map[string]any{
 							"name":      tcItem.Function.Name,
 							"arguments": tcItem.Function.Arguments,
 						},
@@ -305,17 +305,17 @@ func parseClaudeMessage(msg model.ClaudeMessage) (model.TraeMessage, error) {
 					return traeMsg, fmt.Errorf("failed to marshal tool input: %w", err)
 				}
 
-				if traeMsg.ToolCalls == nil {
-					traeMsg.ToolCalls = make([]map[string]any, 0)
-				}
-				traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
-					"id":   id,
-					"type": "function",
-					"function": map[string]any{
-						"name":      name,
-						"arguments": string(inputJSON),
-					},
-				})
+			if traeMsg.ToolCalls == nil {
+				traeMsg.ToolCalls = make([]map[string]any, 0)
+			}
+			traeMsg.ToolCalls = append(traeMsg.ToolCalls, map[string]any{
+				"id":   id,
+				"type": "function",
+				"function_call": map[string]any{
+					"name":      name,
+					"arguments": string(inputJSON),
+				},
+			})
 			case "tool_result":
 				traeMsg.Role = "tool"
 				id, _ := block["tool_use_id"].(string)
