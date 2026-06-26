@@ -56,10 +56,17 @@ func TestConvertClaudeMessagesToTrae_ToolHistory(t *testing.T) {
 	if len(result[1].ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(result[1].ToolCalls))
 	}
-	if result[1].ToolCalls[0]["id"] != "call_123" {
-		t.Errorf("expected id call_123, got %v", result[1].ToolCalls[0]["id"])
+
+	toolCall := result[1].ToolCalls[0]
+	if toolCall["id"] != "call_123" {
+		t.Errorf("expected id call_123, got %v", toolCall["id"])
 	}
-	fn := result[1].ToolCalls[0]["function"].(map[string]interface{})
+
+	fn, ok := toolCall["function_call"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected function_call field as map, got %T", toolCall["function_call"])
+	}
+
 	if fn["name"] != "get_weather" {
 		t.Errorf("expected name get_weather, got %v", fn["name"])
 	}

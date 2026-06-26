@@ -87,8 +87,12 @@ func HandleClaudeMessages(c *gin.Context) {
 
 	traePayload := service.BuildTraeRequest(traeMessages, req.Model, service.ConvertClaudeToolsToTrae(req.Tools), userInput)
 
-	payloadJSON, _ := json.MarshalIndent(traePayload, "", "  ")
-	writeLog(ctx, fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
+	payloadJSON, err := json.Marshal(traePayload)
+	if err != nil {
+		logger.Warn(ctx, "[Claude] Failed to marshal payload for logging", "error", err)
+	} else {
+		writeLog(ctx, fmt.Sprintf("claude_payload_%s.json", rid), payloadJSON)
+	}
 
 	resp, err := service.SendTraeRequest(traePayload, auth)
 	if err != nil {
