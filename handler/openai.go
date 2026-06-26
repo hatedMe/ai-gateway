@@ -46,7 +46,7 @@ func HandleModels(c *gin.Context) {
 	}
 	var models []ModelItem
 
-	traeConfigs, err := service.FetchTraeModels(auth)
+	traeConfigs, err := service.FetchTraeModels(ctx, auth)
 	if err != nil {
 		logger.Error(ctx, "[OpenAI] Fetch models error", "error", err)
 		abortWithOpenAIError(c, http.StatusInternalServerError, err.Error(), "api_error", "")

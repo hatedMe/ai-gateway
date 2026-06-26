@@ -147,19 +147,32 @@ func ReadTraeSSE(ctx context.Context, body io.ReadCloser, onEvent func(event str
 	reader := bufio.NewReaderSize(body, 64*1024)
 	var currentEvent string
 	for {
-		// 在每次读取前检查 context 是否已取消（客户端断开等）
+		// 将阻塞的 ReadString 放到 goroutine 中，配合 select 响应 ctx 取消
+		type readResult struct {
+			line string
+			err  error
+		}
+		resultCh := make(chan readResult, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			resultCh <- readResult{line: line, err: err}
+		}()
+
+		var res readResult
 		if ctx != nil {
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case res = <-resultCh:
 			}
+		} else {
+			res = <-resultCh
 		}
-		line, err := reader.ReadString('\n')
-		if err != nil {
+
+		if res.err != nil {
 			break
 		}
-		line = strings.TrimSpace(line)
+		line := strings.TrimSpace(res.line)
 		if line == "" {
 			continue
 		}

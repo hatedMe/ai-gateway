@@ -26,6 +26,9 @@ func init() {
 			level = slog.LevelWarn
 		case "error":
 			level = slog.LevelError
+		default:
+			// 未知值回退到 debug，并输出提示
+			slog.Warn("Unknown LOG_LEVEL value, falling back to debug", "value", env)
 		}
 	}
 	defaultLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
