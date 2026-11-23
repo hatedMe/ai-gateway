@@ -9,7 +9,7 @@ upstreams:
   responses-main:
     protocol: openai-responses
     base_url: "https://opencode.ai/zen/go/v1"
-    api_key_env: "OPENAI_API_KEY" # 或使用 api_key，二者只能配置一个
+    api_key: "OPENAI_API_KEY" # 或使用 api_key，二者只能配置一个
     # 空字符串取消显式代理，仍遵循 HTTP_PROXY / HTTPS_PROXY / NO_PROXY。
     proxy_url: "http://127.0.0.1:1080"
     models:
@@ -26,7 +26,7 @@ upstreams:
   # chat-main:
   #   protocol: openai-compatible
   #   base_url: "https://chat.example.com/v1" # 改为实际 Chat Completions 服务
-  #   api_key_env: "CHAT_API_KEY"
+  #   api_key: "CHAT_API_KEY"
   #   proxy_url: ""
   #   models:
   #     - name: coding
@@ -45,7 +45,7 @@ upstreams:
   # anthropic-main:
   #   protocol: anthropic
   #   base_url: "https://api.anthropic.com/v1"
-  #   api_key_env: "ANTHROPIC_API_KEY"
+  #   api_key: "ANTHROPIC_API_KEY"
   #   anthropic_version: "2023-06-01" # 按目标服务要求配置
   #   models:
   #     - name: reasoning

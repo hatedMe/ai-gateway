@@ -38,9 +38,13 @@ go run ./cmd/server
 ```powershell
 go install github.com/air-verse/air@latest
 air
+# 或显式指定 Air 配置文件
+air -c .\.air.toml
 ```
 
 仓库中的 `.air.toml` 已配置 `cmd/server` 入口，监听 Go、YAML 文件变化，并忽略 `logs`、`bin` 和 `tmp` 目录。配置修改通过 Air 重启生效；直接启动的进程需要手动重启。
+
+指定 Air 配置文件时必须使用 `-c`，不要运行 `air .\.air.toml`；位置参数会被传给网关，导致 `unexpected positional arguments`。网关的 YAML 配置使用独立的 `--config` 参数。
 
 客户端 Anthropic 基地址设为 `http://127.0.0.1:8176`。支持 `x-api-key` 或 Bearer 客户端认证。响应保留客户端请求的模型名。
 
