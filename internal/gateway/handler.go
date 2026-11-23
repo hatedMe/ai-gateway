@@ -14,17 +14,19 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	Upstreams                          map[string]Upstream
-	BaseURL, APIKey, Model, GatewayKey string
-	ProxyURL                           string
-	RequestLogDir                      string
-	Client                             *http.Client
-	ModelAliases                       map[string]string
-	ReasoningEfforts                   []string
-	ModelReasoningEfforts              map[string][]string
+	ReadBodyTimeout, WriteIdleTimeout, ResponseHeaderTimeout, ReadIdleTimeout time.Duration
+	Upstreams                                                                 map[string]Upstream
+	BaseURL, APIKey, Model, GatewayKey                                        string
+	ProxyURL                                                                  string
+	RequestLogDir                                                             string
+	Client                                                                    *http.Client
+	ModelAliases                                                              map[string]string
+	ReasoningEfforts                                                          []string
+	ModelReasoningEfforts                                                     map[string][]string
 }
 type handler struct {
 	config                                   Config
@@ -37,6 +39,18 @@ type handler struct {
 }
 
 func New(config Config) (http.Handler, error) {
+	if config.ReadBodyTimeout == 0 {
+		config.ReadBodyTimeout = 30 * time.Second
+	}
+	if config.WriteIdleTimeout == 0 {
+		config.WriteIdleTimeout = 60 * time.Second
+	}
+	if config.ResponseHeaderTimeout == 0 {
+		config.ResponseHeaderTimeout = 60 * time.Second
+	}
+	if config.ReadIdleTimeout == 0 {
+		config.ReadIdleTimeout = 120 * time.Second
+	}
 	if config.Upstreams != nil {
 		return newMultiUpstream(config)
 	}
@@ -72,6 +86,7 @@ func New(config Config) (http.Handler, error) {
 	return &handler{config: config, endpoint: strings.TrimRight(config.BaseURL, "/") + "/responses", client: &client}, nil
 }
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = deadlineWriter{w, h.config.WriteIdleTimeout}
 	id := make([]byte, 16)
 	_, _ = rand.Read(id)
 	w.Header().Set("request-id", "req_"+hex.EncodeToString(id))
@@ -109,11 +124,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	var err error
 	if !models {
+		controller := http.NewResponseController(w)
+		_ = controller.SetReadDeadline(time.Now().Add(h.config.ReadBodyTimeout))
 		raw, err = io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
+		_ = controller.SetReadDeadline(time.Time{})
 		h.logRequest(r, "inbound", raw)
 		if err != nil {
 			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
+			if timeoutStatus(err) == 504 {
+				r.Close = true
+				w.Header().Set("Connection", "close")
+				writeError(w, 408, "invalid_request_error", "request body read timed out")
+			} else if errors.As(err, &tooLarge) {
 				writeError(w, 413, "request_too_large", "request body exceeds 16 MiB")
 			} else {
 				writeError(w, 400, "invalid_request_error", "could not read request body")
@@ -259,7 +281,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Context().Err() == nil {
-			writeError(w, 502, "api_error", "upstream connection failed")
+			writeError(w, timeoutStatus(err), "api_error", "upstream connection failed")
 		}
 		return
 	}
@@ -398,7 +420,22 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 	}
 	h.logRequest(req, "upstream", body)
 	req = h.traceRequestHeaders(req, body)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	stop := phaseTimer(h.config.ResponseHeaderTimeout, cancel)
 	resp, err := h.client.Do(req)
+	if stop() {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		cancel()
+		return nil, context.DeadlineExceeded
+	}
+	if err != nil {
+		cancel()
+	} else {
+		resp.Body = &idleBody{ReadCloser: resp.Body, cancel: cancel, timeout: h.config.ReadIdleTimeout}
+	}
 	if err != nil || !adapt || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, err
 	}
@@ -495,7 +532,7 @@ func structuredErrorType(kind, code string) string {
 func writeDetailedError(w http.ResponseWriter, err error) {
 	v := detailedError(w, err)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(502)
+	w.WriteHeader(timeoutStatus(err))
 	_ = json.NewEncoder(w).Encode(v)
 }
 func (h *handler) upstreamError(w http.ResponseWriter, resp *http.Response, count bool) {

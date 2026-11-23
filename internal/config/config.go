@@ -24,14 +24,19 @@ type Config struct {
 	Upstreams map[string]UpstreamConfig `yaml:"upstreams"`
 	Server    struct {
 		Addr              string        `yaml:"addr"`
+		ReadBodyTimeout   time.Duration `yaml:"read_body_timeout"`
+		WriteIdleTimeout  time.Duration `yaml:"write_idle_timeout"`
+		IdleTimeout       time.Duration `yaml:"idle_timeout"`
 		ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
 		ShutdownTimeout   time.Duration `yaml:"shutdown_timeout"`
 	} `yaml:"server"`
 	Upstream struct {
-		BaseURL  string `yaml:"base_url"`
-		APIKey   string `yaml:"api_key"`
-		Model    string `yaml:"model"`
-		ProxyURL string `yaml:"proxy_url"`
+		ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"`
+		ReadIdleTimeout       time.Duration `yaml:"read_idle_timeout"`
+		BaseURL               string        `yaml:"base_url"`
+		APIKey                string        `yaml:"api_key"`
+		Model                 string        `yaml:"model"`
+		ProxyURL              string        `yaml:"proxy_url"`
 	} `yaml:"upstream"`
 	Auth struct {
 		GatewayAPIKey string `yaml:"gateway_api_key"`
@@ -57,6 +62,11 @@ func Load(path string, explicit bool) (Config, error) {
 	c.Server.Addr = "127.0.0.1:8176"
 	c.Server.ReadHeaderTimeout = 10 * time.Second
 	c.Server.ShutdownTimeout = 5 * time.Second
+	c.Server.ReadBodyTimeout = 30 * time.Second
+	c.Server.WriteIdleTimeout = 60 * time.Second
+	c.Server.IdleTimeout = 120 * time.Second
+	c.Upstream.ResponseHeaderTimeout = 60 * time.Second
+	c.Upstream.ReadIdleTimeout = 120 * time.Second
 	c.Upstream.BaseURL = "https://opencode.ai/zen/go/v1"
 	c.Upstream.Model = "muse-spark-1.3-contributor"
 	c.Upstream.ProxyURL = "http://127.0.0.1:7890"
@@ -75,6 +85,15 @@ func Load(path string, explicit bool) (Config, error) {
 	}
 	if err := c.applyEnv(); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
+	for name, u := range c.Upstreams {
+		if u.ResponseHeaderTimeout == 0 {
+			u.ResponseHeaderTimeout = 60 * time.Second
+		}
+		if u.ReadIdleTimeout == 0 {
+			u.ReadIdleTimeout = 120 * time.Second
+		}
+		c.Upstreams[name] = u
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w", path, err)

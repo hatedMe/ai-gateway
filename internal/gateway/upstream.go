@@ -164,6 +164,8 @@ func newMultiUpstream(config Config) (*handler, error) {
 		childConfig.APIKey = up.APIKey
 		childConfig.ProxyURL = up.ProxyURL
 		childConfig.Model = ""
+		childConfig.ResponseHeaderTimeout = up.ResponseHeaderTimeout
+		childConfig.ReadIdleTimeout = up.ReadIdleTimeout
 		built, err := New(childConfig)
 		if err != nil {
 			return nil, err

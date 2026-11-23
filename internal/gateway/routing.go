@@ -3,6 +3,7 @@ package gateway
 import (
 	"ai-gateway-go/internal/translate"
 	"fmt"
+	"time"
 )
 
 type Model struct {
@@ -10,6 +11,7 @@ type Model struct {
 	Capabilities translate.ModelCapabilities
 }
 type Upstream struct {
+	ResponseHeaderTimeout, ReadIdleTimeout                time.Duration
 	Protocol, BaseURL, APIKey, ProxyURL, AnthropicVersion string
 	Models                                                []Model
 }

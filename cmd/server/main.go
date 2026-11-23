@@ -116,11 +116,12 @@ func newServer(c config.Config) (*http.Server, error) {
 				}
 				models = append(models, gateway.Model{Name: m.Name, Model: m.Model, Capabilities: caps})
 			}
-			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models}
+			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models, ResponseHeaderTimeout: u.ResponseHeaderTimeout, ReadIdleTimeout: u.ReadIdleTimeout}
 		}
 	}
 	handler, err := gateway.New(gateway.Config{
-		Upstreams:     upstreams,
+		Upstreams:       upstreams,
+		ReadBodyTimeout: c.Server.ReadBodyTimeout, WriteIdleTimeout: c.Server.WriteIdleTimeout, ResponseHeaderTimeout: c.Upstream.ResponseHeaderTimeout, ReadIdleTimeout: c.Upstream.ReadIdleTimeout,
 		RequestLogDir: logDir,
 		ProxyURL:      c.Upstream.ProxyURL,
 		BaseURL:       c.Upstream.BaseURL, APIKey: c.Upstream.APIKey, Model: c.Upstream.Model,
@@ -131,5 +132,5 @@ func newServer(c config.Config) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Server{Addr: c.Server.Addr, Handler: handler, ReadHeaderTimeout: c.Server.ReadHeaderTimeout}, nil
+	return &http.Server{Addr: c.Server.Addr, Handler: handler, ReadHeaderTimeout: c.Server.ReadHeaderTimeout, IdleTimeout: c.Server.IdleTimeout}, nil
 }

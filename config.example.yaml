@@ -4,9 +4,14 @@ server:
   addr: "127.0.0.1:8176"
   read_header_timeout: "10s"
   shutdown_timeout: "5s"
+  read_body_timeout: "30s"
+  write_idle_timeout: "60s"
+  idle_timeout: "120s"
 
 upstreams:
   responses-main:
+    response_header_timeout: "60s"
+    read_idle_timeout: "120s"
     protocol: openai-responses
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "OPENAI_API_KEY" # 或使用 api_key，二者只能配置一个

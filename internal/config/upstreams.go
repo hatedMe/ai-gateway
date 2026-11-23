@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type ReasoningConfig struct {
@@ -26,13 +27,15 @@ type ModelConfig struct {
 }
 
 type UpstreamConfig struct {
-	Protocol         string        `yaml:"protocol"`
-	BaseURL          string        `yaml:"base_url"`
-	APIKey           string        `yaml:"api_key"`
-	APIKeyEnv        string        `yaml:"api_key_env"`
-	ProxyURL         string        `yaml:"proxy_url"`
-	AnthropicVersion string        `yaml:"anthropic_version"`
-	Models           []ModelConfig `yaml:"models"`
+	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"`
+	ReadIdleTimeout       time.Duration `yaml:"read_idle_timeout"`
+	Protocol              string        `yaml:"protocol"`
+	BaseURL               string        `yaml:"base_url"`
+	APIKey                string        `yaml:"api_key"`
+	APIKeyEnv             string        `yaml:"api_key_env"`
+	ProxyURL              string        `yaml:"proxy_url"`
+	AnthropicVersion      string        `yaml:"anthropic_version"`
+	Models                []ModelConfig `yaml:"models"`
 }
 
 func (c *Config) resolveUpstreamKeys() error {

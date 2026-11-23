@@ -1,58 +1,248 @@
 # 多协议 AI 网关
 
-支持 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses 三种客户端入口，以及这三种协议的多个上游服务。下游请求的 `model` 匹配配置中的公开名称，确定上游地址、认证和真实模型 ID。Go 1.26；配置解析使用 `go.yaml.in/yaml/v4`，其余功能使用标准库。
+一个按模型配置选路的 Go 网关。客户端可以使用 Anthropic Messages、OpenAI Chat Completions 或 OpenAI Responses；网关根据请求中的公开模型名，找到真实模型 ID 和所属上游，再按上游协议发送请求，最后按客户端协议返回结果。
 
-三种客户端入口为 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`。同协议保留原生字段、JSON、SSE 和上游错误体；跨协议转换共同支持的请求和响应内容。
+## 功能
 
-原有单 `upstream` 配置和仅环境变量启动方式继续兼容，仍使用 Responses 上游。下面原有详细转换说明主要针对该 Responses 转换路径。
+- 三种客户端入口与三种上游协议，可组合成九种基础调用路径，支持普通 JSON 和 SSE 流式响应。
+- 多上游、多模型配置：每个上游单独设置地址、密钥和代理，每个公开模型可以映射到不同真实模型 ID。
+- 同协议原生转发，保留原生扩展字段；跨协议转换文字、多轮历史、函数工具、工具选择和工具结果。
+- 按模型声明启用跨协议图片、JSON Schema 输出、推理参数与可读推理摘要；支持范围见[模型兼容能力](#模型兼容能力)。
+- 模型级 Chat token 字段选择，支持 `max_tokens` 与 `max_completion_tokens`。
+- 客户端 API Key 鉴权、模型列表、按上游能力提供真实输入 token 计数。
+- 请求取消、流式终态与工具参数校验、结构化转换错误，以及可选的请求文件日志。
+- 密钥可直接写入 `config.yaml`，不要求使用环境变量；旧单 Responses 上游配置继续兼容。
 
-参考 `D:/homework/CLIProxyAPI/internal/translator/codex/claude` 的处理方式，独立实现，不包含其 OAuth、调度模块。
+每次请求只选择一个上游，不自动重试或故障切换，不执行工具。跨协议转换受已实现的能力范围限制，不代表能完整迁移服务商所有原生功能。
 
-## 启动
+## 请求如何选路
 
-入口为 `cmd/server`。仅环境变量或旧单上游模式默认使用 OpenCode 地址、`muse-spark-1.3-contributor` 模型与本地 `7890` 代理；新模式使用每个上游的显式配置。上游密钥必须自行提供，程序不内置 token。上游是否允许当前地区访问，由服务提供方决定。
+```mermaid
+flowchart LR
+    A[三种客户端入口] --> B[读取请求 model]
+    B --> C[匹配配置 models.name]
+    C --> D[选定上游和真实 models.model]
+    D --> E[原生转发或转换为上游协议]
+    E --> F[响应转换回客户端协议]
+```
 
-推荐复制示例配置并通过环境变量提供密钥：
+| 客户端协议 | 请求入口 | Chat 上游 | Responses 上游 | Anthropic 上游 |
+|---|---|---|---|---|
+| Chat Completions | `POST /v1/chat/completions` | 原生转发 | 协议转换 | 协议转换 |
+| Responses | `POST /v1/responses` | 协议转换 | 原生转发 | 协议转换 |
+| Anthropic Messages | `POST /v1/messages` | 协议转换 | 协议转换 | 原生转发 |
+
+这里的九种组合针对基础文字和函数工具的 JSON/SSE。模型能力声明决定跨协议高级功能是否开放。
+
+例如，请求从 `/v1/responses` 进入，`model` 填 `coding`；配置中 `coding` 属于 `chat-main`、真实模型为 `your-chat-model`，网关就请求该服务的 `/chat/completions`，然后返回 Responses 格式。**入口协议不决定上游，公开模型名决定选路。**
+
+`models[].name` 必须全局唯一；客户端填写这个名称。`models[].model` 是发送给上游的真实 ID。找不到公开模型名返回 `400/model_not_found`，不会猜测或改投其他上游。
+
+## 快速开始
+
+### 1. 准备配置
+
+从源码构建需要 Go 1.26.0 或更高版本；部署已构建的二进制时不需要安装 Go。项目依赖 `go.yaml.in/yaml/v4`，其余运行时代码使用标准库。
+
+在项目根目录复制示例，然后编辑 `config.yaml`：
 
 ```powershell
 Copy-Item config.example.yaml config.yaml
-$env:OPENAI_API_KEY = "你的上游密钥"
+```
+
+也可以将配置精简为下面这个单 Chat 上游示例。替换地址、密钥和真实模型 ID 后，三个入口均可通过公开名 `coding` 调用它：
+
+```yaml
+server:
+  addr: "127.0.0.1:8176"
+  read_header_timeout: "10s"
+  shutdown_timeout: "5s"
+
+upstreams:
+  chat-main:
+    protocol: openai-compatible
+    base_url: "https://chat.example.com/v1"
+    api_key: "replace-with-your-upstream-key"
+    proxy_url: ""
+    models:
+      - name: coding
+        model: "your-chat-model"
+        # 若目标模型要求旧 token 字段，再启用：
+        # compatibility:
+        #   chat_token_limit_field: max_tokens
+
+auth:
+  gateway_api_key: "local-test-key"
+
+logging:
+  requests:
+    enabled: false
+    dir: "logs/requests"
+```
+
+`api_key` 填真实上游密钥；`auth.gateway_api_key` 是客户端连接本地网关时使用的独立密钥。不需要设置环境变量。`api_key_env` 是可选替代方式，只能填环境变量名，不能填真实密钥，且不能与 `api_key` 同时配置。
+
+`base_url` 填服务实际 API 前缀，网关会追加资源路径。例如 Chat 会追加 `/chat/completions`；不要把这个后缀再次写进基地址。服务有自定义前缀时按其实际地址填写。
+
+`proxy_url: ""` 不启用显式代理，但仍遵循进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`。复制[完整示例](config.example.yaml)时，也应检查其中的代理地址是否适合本机。
+
+### 2. 校验并启动
+
+```powershell
 go run ./cmd/server --config ./config.yaml --check-config
 go run ./cmd/server --config ./config.yaml
 ```
 
-`--check-config` 只校验配置，不监听端口、不访问上游、不创建日志目录。真实 `config.yaml` 已加入 Git 忽略列表，示例不包含真实密钥。
+`--check-config` 只校验本地配置，不监听端口、不访问上游、不创建日志目录；校验成功不表示上游密钥或模型已通过在线验证。普通启动后监听配置的地址，默认是 `127.0.0.1:8176`。
 
-也可保持仅环境变量启动：
+### 3. 连接客户端
+
+| 客户端类型 | 常用基地址 | 实际生成的请求路径 |
+|---|---|---|
+| OpenAI Chat Completions | `http://127.0.0.1:8176/v1` | `/v1/chat/completions` |
+| OpenAI Responses | `http://127.0.0.1:8176/v1` | `/v1/responses` |
+| Anthropic Messages | `http://127.0.0.1:8176` | `/v1/messages` |
+
+不同客户端可能自动补 `/v1`，以最终请求路径为准。模型填写配置的公开名，例如 `coding`；客户端密钥填写 `local-test-key`。支持 `Authorization: Bearer ...` 或 `x-api-key`。同协议响应保留上游原生模型名，跨协议响应使用客户端公开模型名。
+
+先查询模型列表，确认本地服务和鉴权可用；多上游模式下这个请求不会访问模型服务：
 
 ```powershell
-$env:OPENAI_API_KEY = "你的上游密钥"
-$env:OPENAI_BASE_URL = "https://api.openai.com/v1"
-$env:OPENAI_MODEL = "上游模型名称"
-$env:GATEWAY_API_KEY = "local-test-key"
-go run ./cmd/server
+$headers = @{ Authorization = "Bearer local-test-key" }
+Invoke-RestMethod -Uri "http://127.0.0.1:8176/v1/models" -Headers $headers
 ```
 
-开发时也可以使用 Air 自动重新编译并重启网关：
+再选一个入口验证模型连通性。以下 PowerShell 示例会实际调用配置的上游：
 
 ```powershell
-go install github.com/air-verse/air@latest
-air
-# 或显式指定 Air 配置文件
+$headers = @{ Authorization = "Bearer local-test-key" }
+$body = @{
+  model = "coding"
+  input = "Reply with OK."
+  max_output_tokens = 64
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8176/v1/responses" `
+  -Headers $headers -ContentType "application/json" -Body $body
+```
+
+其他入口的请求格式：
+
+```json
+{"model":"coding","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":64}
+```
+
+上述 JSON 可用于 `/v1/chat/completions` 和 `/v1/messages`。如需流式输出，增加 `"stream": true`，并使用支持 SSE 的客户端；`Invoke-RestMethod` 示例只演示普通 JSON 请求。
+
+## 部署
+
+### Windows：构建二进制运行
+
+在项目根目录执行：
+
+```powershell
+go build -o bin/gateway.exe ./cmd/server
+.\bin\gateway.exe --config .\config.yaml --check-config
+.\bin\gateway.exe --config .\config.yaml
+```
+
+运行时只需要可执行文件和配置文件，可复制到其他目录部署；同时确认配置中的代理和日志目录有效。源码不包含 Windows 服务安装器，上述方式在当前终端运行。停止后再替换二进制，修改配置后重新启动。
+
+### 本地开发：Air 热重载
+
+已安装 Air 时，在项目根目录执行：
+
+```powershell
 air -c .\.air.toml
 ```
 
-仓库中的 `.air.toml` 已配置 `cmd/server` 入口，监听 Go、YAML 文件变化，并忽略 `logs`、`bin` 和 `tmp` 目录。配置修改通过 Air 重启生效；直接启动的进程需要手动重启。
+直接运行 `air` 也会读取当前目录的 `.air.toml`。仓库配置会重新编译 `cmd/server` 并运行 `tmp/gateway.exe`，监听 Go/YAML 等文件变化，忽略 `logs`、`bin`、`tmp` 和测试文件。Air 用于开发；常驻部署使用构建后的二进制和进程管理器。
 
-指定 Air 配置文件时必须使用 `-c`，不要运行 `air .\.air.toml`；位置参数会被传给网关，导致 `unexpected positional arguments`。网关的 YAML 配置使用独立的 `--config` 参数。
+### Linux：构建与 systemd 常驻
 
-客户端 Anthropic 基地址设为 `http://127.0.0.1:8176`。支持 `x-api-key` 或 Bearer 客户端认证。响应保留客户端请求的模型名。
+在 Linux 上用相同源码和配置构建：
+
+```bash
+go build -o bin/gateway ./cmd/server
+./bin/gateway --config ./config.yaml --check-config
+./bin/gateway --config ./config.yaml
+```
+
+下面是使用 systemd 的部署示例，需要相应管理权限。先停止上面的前台进程，再准备服务账户、程序和配置；若已存在 `ai-gateway` 账户，跳过创建账户的命令：
+
+```bash
+sudo useradd --system --home-dir /opt/ai-gateway --shell /usr/sbin/nologin ai-gateway
+sudo install -d -o root -g ai-gateway -m 750 /opt/ai-gateway
+sudo install -m 755 bin/gateway /opt/ai-gateway/gateway
+sudo install -o root -g ai-gateway -m 640 config.yaml /opt/ai-gateway/config.yaml
+sudo install -d -o ai-gateway -g ai-gateway -m 750 /opt/ai-gateway/logs
+sudo -u ai-gateway /opt/ai-gateway/gateway --config /opt/ai-gateway/config.yaml --check-config
+```
+
+将下面内容保存为 `/etc/systemd/system/ai-gateway.service`：
+
+```ini
+[Unit]
+Description=Multi-protocol AI gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ai-gateway
+Group=ai-gateway
+WorkingDirectory=/opt/ai-gateway
+ExecStart=/opt/ai-gateway/gateway --config /opt/ai-gateway/config.yaml
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+当前程序使用 `SIGINT` 触发优雅关闭，因此服务示例显式指定 `KillSignal=SIGINT`。`TimeoutStopSec` 应大于配置的 `server.shutdown_timeout`。日志相对配置文件目录解析；若启用默认请求日志，服务账户应能写入 `/opt/ai-gateway/logs/requests`。
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-gateway
+sudo systemctl status ai-gateway
+sudo journalctl -u ai-gateway -f
+```
+
+修改配置或替换程序后执行 `sudo systemctl restart ai-gateway`。直接访问网关时，将 `server.addr` 设置为实际需要的监听地址，例如 `0.0.0.0:8176`；通过本机反向代理访问时可以保留 `127.0.0.1:8176`。对外提供访问时设置独立的 `auth.gateway_api_key`。
+
+### 反向代理与 SSE
+
+网关本身提供 HTTP 服务，HTTPS 可由反向代理终止。以下是 Nginx `server` 配置片段，可合并到现有站点配置中：
+
+```nginx
+server {
+    listen 8080;
+    client_max_body_size 16m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8176;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+`proxy_buffering off` 让 SSE 增量及时到达客户端；`proxy_read_timeout` 是两次读取之间的空闲超时，可按实际流式调用时长调整。客户端的鉴权头仍传给网关。仓库目前没有 Dockerfile 或 Compose 文件，上述部署直接使用二进制。
+
+## 配置说明
 
 ### 配置文件规则
 
 配置文件选择：`--config <路径>` > 非空 `GATEWAY_CONFIG` > 当前工作目录 `config.yaml`。显式指定的文件不存在即失败；默认文件不存在时允许仅靠环境变量启动。
 
-旧单上游字段优先级：**已设置的环境变量 > YAML 显式字段 > 内置默认值**。新配置使用 `upstreams`，每个服务的密钥可通过 `api_key_env` 显式读取环境变量，完整字段与注释见 [config.example.yaml](config.example.yaml)。不自动加载 `.env`，不做 `${VAR}` 插值。
+旧单上游字段优先级：**已设置的环境变量 > YAML 显式字段 > 内置默认值**。新配置使用 `upstreams`，每个服务的密钥可直接使用 `api_key`，也可通过 `api_key_env` 显式读取环境变量，完整字段与注释见 [config.example.yaml](config.example.yaml)。不自动加载 `.env`，不做 `${VAR}` 插值。
 
 - 字段缺省沿用默认值；显式 `false`、空字符串、`[]`、`{}` 保留原意。映射和列表整体替换，不做深度合并。
 - 空环境变量会覆盖文件值：空 `OPENAI_MODEL` 清除固定模型，空 `GATEWAY_API_KEY` 关闭本地鉴权，空集合变量清空集合；空 `OPENAI_API_KEY`、`GATEWAY_ADDR`、`OPENAI_BASE_URL` 校验失败。
@@ -70,7 +260,7 @@ upstreams:
   chat-main:
     protocol: openai-compatible
     base_url: "https://chat.example.com/v1"
-    api_key_env: "CHAT_API_KEY"
+    api_key: "replace-with-your-chat-key"
     models:
       - name: coding
         model: "your-chat-model"
@@ -79,7 +269,7 @@ upstreams:
   anthropic-main:
     protocol: anthropic
     base_url: "https://api.anthropic.com/v1"
-    api_key_env: "ANTHROPIC_API_KEY"
+    api_key: "replace-with-your-anthropic-key"
     anthropic_version: "2023-06-01"
     models:
       - name: reasoning
@@ -144,7 +334,7 @@ models:
 
 Chat/Anthropic 上游的跨协议 SSE 保留文本、拒答、工具及摘要的段落次序，工具身份可晚于参数到达，待身份齐全再发送。累计内容、待发内容及工具身份共用 32 MiB 预算；输出项和待发操作队列各最多 32768 项。需要显式结束标记；正常结束、拒答、过滤、截断和断流分别处理，不补造工具成功结果或成功终态。取消后停止读取与发送。
 
-### OpenCode 上游
+### 旧单上游与 OpenCode 启动脚本
 
 ```powershell
 $env:OPENAI_API_KEY = "你的 token"
@@ -185,9 +375,26 @@ $env:OPENAI_MODEL_REASONING_EFFORTS = '{"your-openai-model":["none","low","mediu
 
 别名优先于固定模型配置。配置读取进程环境，不自动加载 `.env`。不向上游转发客户端密钥、Anthropic 版本或 beta 头。
 
+## 常见问题
+
+| 现象 | 排查方式 |
+|---|---|
+| `unexpected positional arguments` | Air 配置用 `air -c .\.air.toml`，不要使用 `air .\.air.toml`；网关配置使用 `--config`。 |
+| `upstream.api_key ... is required` | 检查 `config.yaml` 是否存在，以及上游 `api_key` 是否已填写；缺少默认配置时会进入旧单上游模式。 |
+| `api_key_env ... must be nonempty` | 直接保存密钥时把字段改为 `api_key`；`api_key_env` 只用于引用进程环境变量。 |
+| `400/model_not_found` | 请求中的 `model` 必须匹配全局唯一的公开 `models[].name`，不一定等于真实模型 ID。 |
+| `401` | 区分本地网关鉴权和上游鉴权；客户端使用 `auth.gateway_api_key`，网关使用所选上游的 `api_key`。 |
+| `400/unsupported_field` 或 `unsupported_capability` | 检查模型能力声明及转换错误的 `stage`、`field`；同协议原生能力与跨协议能力范围不同。 |
+| Chat 上游提示不认识 token 字段 | 按目标模型要求配置 `compatibility.chat_token_limit_field`，不要根据模型名猜测。 |
+| `502` 或流式错误 | 核对客户端错误、上游状态、request ID、转换阶段和字段；单凭 HTTP 200 也不能确认客户端已成功解析响应。 |
+| SSE 内容最后一次性出现 | 检查客户端是否消费 SSE，以及反向代理是否关闭响应缓冲。 |
+| 请求日志目录为空 | 检查 `logging.requests.enabled`、鉴权是否通过、路径和写权限；模型列表和计数请求不会生成请求正文日志。 |
+
+启动成功只代表网关已监听。`--check-config` 校验本地配置，模型列表验证本地选路清单，真实生成请求才验证上游连通性；三者用途不同。
+
 ## 接口
 
-- `POST /v1/messages`：普通与流式消息，接受 `?beta=true`。
+- `POST /v1/messages`：普通与流式消息；旧单 Responses 路径接受 `?beta=true`，新跨协议路径拒绝查询参数。
 - `POST /v1/chat/completions`：Chat Completions 普通与流式消息，OpenAI SDK 基地址使用 `http://127.0.0.1:8176/v1`。
 - `POST /v1/responses`：Responses 普通与流式请求，按模型选中 Responses、Chat 或 Anthropic 上游。
 - `POST /v1/messages/count_tokens`：按模型调用 Responses 或 Anthropic 的真实计数接口；Chat 上游或上游不支持时返回 501，不使用字符估算。
@@ -272,9 +479,9 @@ thinking.display 支持 summarized、omitted、updates。summarized 请求摘要
 
 signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、直接推理及 encrypted_content，并非 Anthropic 签名。下一轮提交完整历史可恢复；无加密内容不伪造隐藏状态。SSE 等待最终推理项再发送 signature_delta。不要把载体发送给真实 Anthropic。
 
-## 工具闭环和验证
+## 日志、工具闭环和验证
 
-开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。每个请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
+开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。正常出站的请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
 
 上游通过 httptrace 捕获传输层实际写出的请求头，包含自动添加的 Content-Length、Accept-Encoding 或 HTTP/2 伪头，header_source 为 transport。若连接失败、尚未发出请求，则保留 prepared 记录。`.http` 为便于查看的文本展示，不是 HTTP/2 帧或 TLS 抓包。鉴权在读取正文之前执行；鉴权失败不记录正文，并关闭连接以避免等待未发送的正文。已认证的转换失败请求仍保留入站记录。认证头、Cookie 和敏感 query 值为 `[REDACTED]`；正文保持原样。日志目录已加入忽略列表。旧版生成的模型列表日志仍保留，新版不再新增。
 
@@ -296,3 +503,5 @@ go build -o bin/gateway.exe ./cmd/server
 
 
 `Responses` 转换为 Messages/Chat 时，保留状态（正文、工具身份、推理与待发数据）共用 32 MiB 预算，输出项、内容块及待发事件分别最多 32768 个；超限终止转换，不发送成功终态。原生 SSE 透传不累计保存全文。
+
+超时配置：`server.read_body_timeout` 默认 30s；`server.write_idle_timeout` 默认 60s，按次写入续期；`server.idle_timeout` 默认 120s。旧 `upstream` 和各 `upstreams.<name>` 的 `response_header_timeout` 默认 60s、`read_idle_timeout` 默认 120s，后者仅计算等待响应体读取的时间，不计算下游背压。时长必须为正。正文读取超时返回 408，上游超时在响应尚未提交时返回 504；已开始的流报协议错误或关闭原生连接，不补成功终态。没有整条 SSE 总时长限制。

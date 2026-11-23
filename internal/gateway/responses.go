@@ -69,7 +69,7 @@ func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []b
 			return
 		}
 		if r.Context().Err() == nil {
-			writeError(w, 502, "api_error", "upstream connection failed")
+			writeError(w, timeoutStatus(err), "api_error", "upstream connection failed")
 		}
 		return
 	}
