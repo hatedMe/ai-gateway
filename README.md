@@ -1,6 +1,6 @@
 # Messages / Chat Completions → Responses 网关
 
-Anthropic 客户端调用本机 `POST /v1/messages`，网关请求上游 OpenAI `POST /v1/responses`，并将 JSON 或 SSE 转回 Anthropic 消息格式。Go 1.26，仅使用标准库。
+Anthropic 客户端调用本机 `POST /v1/messages`，网关请求上游 OpenAI `POST /v1/responses`，并将 JSON 或 SSE 转回 Anthropic 消息格式。Go 1.26；配置解析使用 `go.yaml.in/yaml/v4`，其余功能使用标准库。
 
 同时支持 OpenAI 客户端 `POST /v1/chat/completions`，共用相同 Responses 上游和运行配置，返回 Chat Completions 格式。
 
@@ -10,14 +10,27 @@ Anthropic 客户端调用本机 `POST /v1/messages`，网关请求上游 OpenAI 
 
 ## 启动
 
-当前开发版已在 `cmd/gateway/main.go` 内置指定的 OpenCode 地址、token 和 `muse-spark-1.3-contributor` 模型，可直接 `go run ./cmd/gateway`。环境变量仍可覆盖这些默认值。上游是否允许当前地区访问，由服务提供方决定。
+入口为 `cmd/server`。默认使用 OpenCode 地址、`muse-spark-1.3-contributor` 模型与本地 `7890` 代理；上游密钥必须自行提供，程序不再内置 token。上游是否允许当前地区访问，由服务提供方决定。
+
+推荐复制示例配置并通过环境变量提供密钥：
+
+```powershell
+Copy-Item config.example.yaml config.yaml
+$env:OPENAI_API_KEY = "你的上游密钥"
+go run ./cmd/server --config ./config.yaml --check-config
+go run ./cmd/server --config ./config.yaml
+```
+
+`--check-config` 只校验配置，不监听端口、不访问上游、不创建日志目录。真实 `config.yaml` 已加入 Git 忽略列表，示例不包含真实密钥。
+
+也可保持仅环境变量启动：
 
 ```powershell
 $env:OPENAI_API_KEY = "你的上游密钥"
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 $env:OPENAI_MODEL = "上游模型名称"
 $env:GATEWAY_API_KEY = "local-test-key"
-go run ./cmd/gateway
+go run ./cmd/server
 ```
 
 开发时也可以使用 Air 自动重新编译并重启网关：
@@ -27,9 +40,24 @@ go install github.com/air-verse/air@latest
 air
 ```
 
-仓库中的 `.air.toml` 已配置 `cmd/gateway` 入口，并忽略 `logs`、`bin` 和 `tmp` 目录。
+仓库中的 `.air.toml` 已配置 `cmd/server` 入口，监听 Go、YAML 文件变化，并忽略 `logs`、`bin` 和 `tmp` 目录。配置修改通过 Air 重启生效；直接启动的进程需要手动重启。
 
 客户端 Anthropic 基地址设为 `http://127.0.0.1:8176`。支持 `x-api-key` 或 Bearer 客户端认证。响应保留客户端请求的模型名。
+
+### 配置文件规则
+
+配置文件选择：`--config <路径>` > 非空 `GATEWAY_CONFIG` > 当前工作目录 `config.yaml`。显式指定的文件不存在即失败；默认文件不存在时允许仅靠环境变量启动。
+
+字段优先级：**已设置的环境变量 > YAML 显式字段 > 内置默认值**。YAML 按 `server`、`upstream`、`auth`、`models`、`logging.requests` 分组，完整字段与注释见 [config.example.yaml](config.example.yaml)。不自动加载 `.env`，不做 `${VAR}` 插值。
+
+- 字段缺省沿用默认值；显式 `false`、空字符串、`[]`、`{}` 保留原意。映射和列表整体替换，不做深度合并。
+- 空环境变量会覆盖文件值：空 `OPENAI_MODEL` 清除固定模型，空 `GATEWAY_API_KEY` 关闭本地鉴权，空集合变量清空集合；空 `OPENAI_API_KEY`、`GATEWAY_ADDR`、`OPENAI_BASE_URL` 校验失败。
+- `upstream.proxy_url: ""` 或空 `OPENAI_PROXY_URL` 取消显式代理，仍遵循标准库 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，不代表强制直连。
+- `logging.requests.enabled: false` 关闭请求文件日志；启用时 `dir` 必须非空。相对日志路径以实际加载的配置文件目录为基准；未加载文件时以工作目录为基准。
+- `server.read_header_timeout`、`server.shutdown_timeout` 默认为 `10s`、`5s`，必须为正数时长字符串。不设置覆盖完整 SSE 生命周期的总响应写超时。
+- 拒绝未知字段、重复键、`null`、错误类型、YAML 别名及多个 YAML 文档。修改配置后重启生效，程序不自动写回配置。
+
+迁移旧部署时，需要显式提供上游密钥，并检查原先设置为空的环境变量；旧版会把部分空环境变量当作未配置，现在使用上述覆盖规则。
 
 ### OpenCode 上游
 
@@ -47,8 +75,8 @@ $env:OPENAI_API_KEY = "你的 token"
 | 环境变量 | 用途 | 默认值 |
 |---|---|---|
 | OPENAI_API_KEY | 上游密钥，必填 | 无 |
-| OPENAI_BASE_URL | API 基地址，程序追加 `/responses` 等路径 | `https://api.openai.com/v1` |
-| OPENAI_MODEL | 固定上游模型 | 使用客户端模型名 |
+| OPENAI_BASE_URL | API 基地址，程序追加 `/responses` 等路径 | `https://opencode.ai/zen/go/v1` |
+| OPENAI_MODEL | 固定上游模型，空字符串使用客户端模型名 | `muse-spark-1.3-contributor` |
 | OPENAI_MODEL_ALIASES | 客户端名到上游名的 JSON 对象 | 无 |
 | OPENAI_REASONING_EFFORTS | 支持的推理强度，逗号分隔 | 由上游验证 |
 | OPENAI_MODEL_REASONING_EFFORTS | 按上游模型配置强度集合的 JSON 对象 | 使用全局集合 |
@@ -60,7 +88,7 @@ $env:OPENAI_API_KEY = "你的 token"
 
 ```powershell
 $env:OPENAI_PROXY_URL = "http://127.0.0.1:7890"
-go run ./cmd/gateway
+go run ./cmd/server
 ```
 
 也可使用 `socks5://127.0.0.1:1080` 或带认证的 `http://用户名:密码@主机:端口`。HTTPS 上游经 HTTP 代理使用 CONNECT；所有上游接口共享此设置。代理的实际出口能否访问模型仍由上游限制决定。
@@ -155,7 +183,7 @@ signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、�
 
 ## 工具闭环和验证
 
-开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志位于工作目录 `logs/requests/`。每个请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
+开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。每个请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
 
 上游通过 httptrace 捕获传输层实际写出的请求头，包含自动添加的 Content-Length、Accept-Encoding 或 HTTP/2 伪头，header_source 为 transport。若连接失败、尚未发出请求，则保留 prepared 记录。`.http` 为便于查看的文本展示，不是 HTTP/2 帧或 TLS 抓包。转换/鉴权失败仍保留入站记录。认证头、Cookie 和敏感 query 值为 `[REDACTED]`；正文保持原样。日志目录已加入忽略列表。旧版生成的模型列表日志仍保留，新版不再新增。
 
@@ -166,7 +194,7 @@ signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、�
 ```powershell
 go test -count=1 ./...
 go vet ./...
-go build -o bin/gateway.exe ./cmd/gateway
+go build -o bin/gateway.exe ./cmd/server
 ```
 
 环境已安装 Python `anthropic` SDK 时，可运行 `python examples/sdk_smoke.py`，使用编译后的网关与本地模拟上游验证真实 SDK 的模型/计数、JSON/SSE、thinking、停止词和多轮工具闭环。无需真实密钥。

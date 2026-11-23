@@ -13,7 +13,7 @@ if (-not [string]::IsNullOrWhiteSpace($Model)) {
 
 Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
-    go run ./cmd/gateway
+    go run ./cmd/server
 } finally {
     Pop-Location
 }

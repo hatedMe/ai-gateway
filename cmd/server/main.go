@@ -2,77 +2,65 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
-	"time"
 
+	"ai-gateway-go/internal/config"
 	"ai-gateway-go/internal/gateway"
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	base := os.Getenv("OPENAI_BASE_URL")
-	if base == "" {
-		base = "https://opencode.ai/zen/go/v1"
+func run(args []string) error {
+	flags := flag.NewFlagSet("gateway", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	path := flags.String("config", "", "YAML configuration file")
+	check := flags.Bool("check-config", false, "validate configuration without starting the server")
+	if err := flags.Parse(args); err != nil {
+		return err
 	}
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		apiKey = "oc_sk_0c8b0ecc6fea_tVCyHqs5bo3Z1gVPZ5JH-lDQx1XkEzaC"
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments")
 	}
-	model := os.Getenv("OPENAI_MODEL")
-	if model == "" {
-		model = "muse-spark-1.3-contributor"
-	}
-	address := os.Getenv("GATEWAY_ADDR")
-	if address == "" {
-		address = "127.0.0.1:8176"
-	}
-	var aliases map[string]string
-	var capabilities map[string][]string
-	if raw := os.Getenv("OPENAI_MODEL_ALIASES"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &aliases); err != nil {
-			return fmt.Errorf("OPENAI_MODEL_ALIASES: %w", err)
+	explicit := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			explicit = true
 		}
-	}
-	if raw := os.Getenv("OPENAI_MODEL_REASONING_EFFORTS"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &capabilities); err != nil {
-			return fmt.Errorf("OPENAI_MODEL_REASONING_EFFORTS: %w", err)
-		}
-	}
-	var efforts []string
-	if raw := os.Getenv("OPENAI_REASONING_EFFORTS"); raw != "" {
-		for _, effort := range strings.Split(raw, ",") {
-			if effort = strings.TrimSpace(effort); effort != "" {
-				efforts = append(efforts, effort)
-			}
-		}
-	}
-	proxyURL := os.Getenv("OPENAI_PROXY_URL")
-	if proxyURL == "" {
-		proxyURL = "http://127.0.0.1:7890"
-	}
-	handler, err := gateway.New(gateway.Config{
-		RequestLogDir: "logs/requests",
-		ProxyURL:      proxyURL,
-		ModelAliases:  aliases, ReasoningEfforts: efforts, ModelReasoningEfforts: capabilities,
-		BaseURL: base, APIKey: apiKey, Model: model, GatewayKey: os.Getenv("GATEWAY_API_KEY"),
 	})
+	if explicit && *path == "" {
+		return fmt.Errorf("--config: path must not be empty")
+	}
+	if !explicit {
+		if env := os.Getenv("GATEWAY_CONFIG"); env != "" {
+			*path, explicit = env, true
+		} else {
+			*path = "config.yaml"
+		}
+	}
+	c, err := config.Load(*path, explicit)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	if *check {
+		log.Printf("Configuration valid (path=%s; environment overrides applied; implicit missing file allowed=%t)", *path, !explicit)
+		return nil
+	}
+	server, err := newServer(c)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	stopped := make(chan struct{})
@@ -81,7 +69,7 @@ func run() error {
 		defer close(shutdownDone)
 		select {
 		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.Server.ShutdownTimeout)
 			defer cancel()
 			if err := server.Shutdown(shutdownCtx); err != nil {
 				_ = server.Close()
@@ -90,10 +78,29 @@ func run() error {
 		}
 	}()
 	defer close(stopped)
-	log.Printf("Messages gateway listening on %s", address)
+	log.Printf("Messages gateway listening on %s", server.Addr)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	<-shutdownDone
 	return nil
+}
+
+func newServer(c config.Config) (*http.Server, error) {
+	logDir := ""
+	if c.Logging.Requests.Enabled {
+		logDir = c.Logging.Requests.Dir
+	}
+	handler, err := gateway.New(gateway.Config{
+		RequestLogDir: logDir,
+		ProxyURL:      c.Upstream.ProxyURL,
+		BaseURL:       c.Upstream.BaseURL, APIKey: c.Upstream.APIKey, Model: c.Upstream.Model,
+		GatewayKey:   c.Auth.GatewayAPIKey,
+		ModelAliases: c.Models.Aliases, ReasoningEfforts: c.Models.ReasoningEfforts,
+		ModelReasoningEfforts: c.Models.ModelReasoningEfforts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Server{Addr: c.Server.Addr, Handler: handler, ReadHeaderTimeout: c.Server.ReadHeaderTimeout}, nil
 }
