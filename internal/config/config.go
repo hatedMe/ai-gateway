@@ -21,7 +21,8 @@ import (
 )
 
 type Config struct {
-	Server struct {
+	Upstreams map[string]UpstreamConfig `yaml:"upstreams"`
+	Server    struct {
 		Addr              string        `yaml:"addr"`
 		ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
 		ShutdownTimeout   time.Duration `yaml:"shutdown_timeout"`
@@ -117,6 +118,33 @@ func decodeYAML(raw []byte, c *Config) error {
 	if err := checkNode(root, reflect.TypeOf(*c), "config"); err != nil {
 		return err
 	}
+	var modern, legacy bool
+	for i := 0; i < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		modern = modern || key.Value == "upstreams"
+		if key.Value == "upstreams" {
+			for j := 1; j < len(value.Content); j += 2 {
+				entry := value.Content[j]
+				hasKey, hasEnv := false, false
+				for k := 0; k < len(entry.Content); k += 2 {
+					hasKey = hasKey || entry.Content[k].Value == "api_key"
+					hasEnv = hasEnv || entry.Content[k].Value == "api_key_env"
+				}
+				if hasKey && hasEnv {
+					return fmt.Errorf("upstreams[entry]: api_key and api_key_env are mutually exclusive")
+				}
+			}
+		}
+		legacy = legacy || key.Value == "upstream"
+		if key.Value == "models" {
+			for j := 0; j < len(value.Content); j += 2 {
+				legacy = legacy || value.Content[j].Value == "aliases"
+			}
+		}
+	}
+	if modern && legacy {
+		return fmt.Errorf("upstreams: cannot combine with legacy upstream or models.aliases")
+	}
 	if err := root.Decode(c); err != nil {
 		return fmt.Errorf("invalid YAML configuration")
 	}
@@ -201,6 +229,11 @@ func checkNode(n *yaml.Node, typ reflect.Type, path string) error {
 }
 
 func (c *Config) applyEnv() error {
+	if c.Upstreams != nil {
+		if err := c.resolveUpstreamKeys(); err != nil {
+			return err
+		}
+	}
 	for _, field := range []struct {
 		name   string
 		target *string
@@ -209,11 +242,14 @@ func (c *Config) applyEnv() error {
 		{"OPENAI_API_KEY", &c.Upstream.APIKey}, {"OPENAI_MODEL", &c.Upstream.Model},
 		{"OPENAI_PROXY_URL", &c.Upstream.ProxyURL}, {"GATEWAY_API_KEY", &c.Auth.GatewayAPIKey},
 	} {
+		if c.Upstreams != nil && strings.HasPrefix(field.name, "OPENAI_") {
+			continue
+		}
 		if value, ok := os.LookupEnv(field.name); ok {
 			*field.target = value
 		}
 	}
-	if raw, ok := os.LookupEnv("OPENAI_MODEL_ALIASES"); ok {
+	if raw, ok := os.LookupEnv("OPENAI_MODEL_ALIASES"); ok && c.Upstreams == nil {
 		c.Models.Aliases = nil
 		if raw != "" {
 			if err := json.Unmarshal([]byte(raw), &c.Models.Aliases); err != nil || c.Models.Aliases == nil {
@@ -260,17 +296,23 @@ func (c Config) Validate() error {
 	if c.Server.ShutdownTimeout <= 0 {
 		return fmt.Errorf("server.shutdown_timeout: must be positive")
 	}
-	if strings.TrimSpace(c.Upstream.APIKey) == "" {
-		return fmt.Errorf("upstream.api_key (OPENAI_API_KEY): is required")
-	}
-	u, err := url.Parse(c.Upstream.BaseURL)
-	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("upstream.base_url: expected an absolute HTTP(S) URL without credentials, query or fragment")
-	}
-	if c.Upstream.ProxyURL != "" {
-		u, err := url.Parse(c.Upstream.ProxyURL)
-		if err != nil || u == nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return fmt.Errorf("upstream.proxy_url: expected an HTTP(S) or SOCKS5 proxy URL without path, query or fragment")
+	if c.Upstreams != nil {
+		if err := c.validateUpstreams(); err != nil {
+			return err
+		}
+	} else {
+		if strings.TrimSpace(c.Upstream.APIKey) == "" {
+			return fmt.Errorf("upstream.api_key (OPENAI_API_KEY): is required")
+		}
+		u, err := url.Parse(c.Upstream.BaseURL)
+		if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("upstream.base_url: expected an absolute HTTP(S) URL without credentials, query or fragment")
+		}
+		if c.Upstream.ProxyURL != "" {
+			u, err := url.Parse(c.Upstream.ProxyURL)
+			if err != nil || u == nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+				return fmt.Errorf("upstream.proxy_url: expected an HTTP(S) or SOCKS5 proxy URL without path, query or fragment")
+			}
 		}
 	}
 	if c.Logging.Requests.Enabled && strings.TrimSpace(c.Logging.Requests.Dir) == "" {

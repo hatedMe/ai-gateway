@@ -1,16 +1,16 @@
-# Messages / Chat Completions → Responses 网关
+# 多协议 AI 网关
 
-Anthropic 客户端调用本机 `POST /v1/messages`，网关请求上游 OpenAI `POST /v1/responses`，并将 JSON 或 SSE 转回 Anthropic 消息格式。Go 1.26；配置解析使用 `go.yaml.in/yaml/v4`，其余功能使用标准库。
+支持 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses 三种客户端入口，以及这三种协议的多个上游服务。下游请求的 `model` 匹配配置中的公开名称，确定上游地址、认证和真实模型 ID。Go 1.26；配置解析使用 `go.yaml.in/yaml/v4`，其余功能使用标准库。
 
-同时支持 OpenAI 客户端 `POST /v1/chat/completions`，共用相同 Responses 上游和运行配置，返回 Chat Completions 格式。
+三种客户端入口为 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`。同协议保留原生字段、JSON、SSE 和上游错误体；跨协议转换共同支持的请求和响应内容。
 
-也支持客户端原生 `POST /v1/responses`，保留 Responses 请求字段、响应体与 SSE 事件。
+原有单 `upstream` 配置和仅环境变量启动方式继续兼容，仍使用 Responses 上游。下面原有详细转换说明主要针对该 Responses 转换路径。
 
 参考 `D:/homework/CLIProxyAPI/internal/translator/codex/claude` 的处理方式，独立实现，不包含其 OAuth、调度模块。
 
 ## 启动
 
-入口为 `cmd/server`。默认使用 OpenCode 地址、`muse-spark-1.3-contributor` 模型与本地 `7890` 代理；上游密钥必须自行提供，程序不再内置 token。上游是否允许当前地区访问，由服务提供方决定。
+入口为 `cmd/server`。仅环境变量或旧单上游模式默认使用 OpenCode 地址、`muse-spark-1.3-contributor` 模型与本地 `7890` 代理；新模式使用每个上游的显式配置。上游密钥必须自行提供，程序不内置 token。上游是否允许当前地区访问，由服务提供方决定。
 
 推荐复制示例配置并通过环境变量提供密钥：
 
@@ -48,7 +48,7 @@ air
 
 配置文件选择：`--config <路径>` > 非空 `GATEWAY_CONFIG` > 当前工作目录 `config.yaml`。显式指定的文件不存在即失败；默认文件不存在时允许仅靠环境变量启动。
 
-字段优先级：**已设置的环境变量 > YAML 显式字段 > 内置默认值**。YAML 按 `server`、`upstream`、`auth`、`models`、`logging.requests` 分组，完整字段与注释见 [config.example.yaml](config.example.yaml)。不自动加载 `.env`，不做 `${VAR}` 插值。
+旧单上游字段优先级：**已设置的环境变量 > YAML 显式字段 > 内置默认值**。新配置使用 `upstreams`，每个服务的密钥可通过 `api_key_env` 显式读取环境变量，完整字段与注释见 [config.example.yaml](config.example.yaml)。不自动加载 `.env`，不做 `${VAR}` 插值。
 
 - 字段缺省沿用默认值；显式 `false`、空字符串、`[]`、`{}` 保留原意。映射和列表整体替换，不做深度合并。
 - 空环境变量会覆盖文件值：空 `OPENAI_MODEL` 清除固定模型，空 `GATEWAY_API_KEY` 关闭本地鉴权，空集合变量清空集合；空 `OPENAI_API_KEY`、`GATEWAY_ADDR`、`OPENAI_BASE_URL` 校验失败。
@@ -58,6 +58,48 @@ air
 - 拒绝未知字段、重复键、`null`、错误类型、YAML 别名及多个 YAML 文档。修改配置后重启生效，程序不自动写回配置。
 
 迁移旧部署时，需要显式提供上游密钥，并检查原先设置为空的环境变量；旧版会把部分空环境变量当作未配置，现在使用上述覆盖规则。
+
+### 多上游和模型路由
+
+```yaml
+upstreams:
+  chat-main:
+    protocol: openai-compatible
+    base_url: "https://chat.example.com/v1"
+    api_key_env: "CHAT_API_KEY"
+    models:
+      - name: coding
+        model: "your-chat-model"
+      - name: coding-fast
+        model: "your-fast-model"
+  anthropic-main:
+    protocol: anthropic
+    base_url: "https://api.anthropic.com/v1"
+    api_key_env: "ANTHROPIC_API_KEY"
+    anthropic_version: "2023-06-01"
+    models:
+      - name: reasoning
+        model: "your-claude-model"
+```
+
+`model: coding` 的下游请求选中 `chat-main`，真实出站模型为 `your-chat-model`。三个客户端入口都使用相同的模型索引。可以继续添加任意多个上游，每个服务声明多个模型；新增同类服务无需改代码。
+
+| protocol | base_url 后追加的路径 | 出站认证 |
+|---|---|---|
+| `openai-responses` | `/responses` | Bearer 密钥 |
+| `openai-compatible` | `/chat/completions` | Bearer 密钥 |
+| `anthropic` | `/messages` | `x-api-key` 和配置的 `anthropic-version` |
+
+- `models` 必须是非空列表，每项 `name`、`model` 必填；`name` 在所有上游间唯一，重复时启动失败。未知公开名称返回 `400`、`model_not_found`，不会访问任何上游，也不会自动按真实 ID 匹配。
+- 每个上游独立设置地址、密钥、代理。`api_key` 与 `api_key_env` 二选一，后者引用的环境变量缺失或为空时启动失败。`anthropic_version` 仅用于 Anthropic，且必须显式填写。基地址须包含服务实际 API 前缀，不含最终资源路径。
+- 新模式不能同时配置旧 `upstream` 或 `models.aliases`；旧别名迁为上游列表中的 `name/model`。旧 `OPENAI_BASE_URL`、`OPENAI_MODEL`、`OPENAI_PROXY_URL`、`OPENAI_MODEL_ALIASES` 等单上游覆盖变量需要清除。`OPENAI_API_KEY` 只有被 `api_key_env` 显式引用时才可作为新模式密钥来源，不会自动覆盖所有服务。全局监听、鉴权和推理配置变量仍可使用。
+- `/v1/models` 及详情在新模式列出配置的公开 `name`，沿用现有 Anthropic 风格、排序和分页，不联网获取远端模型。配置清单不代表已在线验证模型可用。
+- 计数接口按模型选路：Responses 使用 `/responses/input_tokens`，Anthropic 使用 `/messages/count_tokens`；Chat 上游返回 `501`，不估算、不切换上游。
+- 文字和多轮函数工具调用支持九种入站/上游组合的 JSON/SSE。新增 Chat/Anthropic 出站转换目前支持文字、函数工具、token 限额、采样和工具选择；图片、文件、结构化输出、推理配置/历史签名、缓存和服务端历史引用等未映射内容会在出站前明确拒绝。同协议可保留服务原生能力；已有 Responses 出站转换保留其现有兼容能力。
+- 同协议原生响应保留真实模型名；跨协议响应使用客户端公开模型名。上游强制 SSE 时可聚合为 JSON；跨协议流中断或工具参数不完整时发送错误，不补造成功终态。Responses 跨协议流提供参数、内容块和输出项的完成事件。请求取消会关闭上游调用。
+- 每个请求只选择一个上游，失败不自动重试或切换。出站请求日志额外记录 `upstream` 和 `upstream_protocol`，认证头继续脱敏。
+
+只有一个 Responses 服务时也可采用示例中的新格式。旧的 `upstream` 格式可继续使用，但其固定模型回退不应用于新模式。
 
 ### OpenCode 上游
 
@@ -105,8 +147,8 @@ $env:OPENAI_MODEL_REASONING_EFFORTS = '{"your-openai-model":["none","low","mediu
 - `POST /v1/messages`：普通与流式消息，接受 `?beta=true`。
 - `POST /v1/chat/completions`：Chat Completions 普通与流式消息，OpenAI SDK 基地址使用 `http://127.0.0.1:8176/v1`。
 - `POST /v1/responses`：原生 Responses 普通与流式请求，仍请求上游 `/responses`。
-- `POST /v1/messages/count_tokens`：调用上游 `/responses/input_tokens` 获取真实计数；上游不支持返回 501，不使用字符估算。
-- `GET /v1/models`、`GET /v1/models/{id}`：配置别名时列出别名，否则转换上游 `/models`。支持 limit/before_id/after_id 本地分页；别名创建时间为 epoch，不自动追取源模型列表的额外分页。
+- `POST /v1/messages/count_tokens`：按模型调用 Responses 或 Anthropic 的真实计数接口；Chat 上游或上游不支持时返回 501，不使用字符估算。
+- `GET /v1/models`、`GET /v1/models/{id}`：多上游模式列出配置的公开模型名；旧模式配置别名时列出别名，否则转换上游 `/models`。支持 limit/before_id/after_id 本地分页；配置模型创建时间为 epoch，不自动追取源模型列表的额外分页。
 
 ```powershell
 curl.exe -N http://127.0.0.1:8176/v1/messages -H "Content-Type: application/json" -H "x-api-key: local-test-key" --data-binary "@examples/message.json"
@@ -118,7 +160,7 @@ curl.exe -N http://127.0.0.1:8176/v1/messages -H "Content-Type: application/json
 
 OpenAI SDK 使用 `base_url="http://127.0.0.1:8176/v1"`，调用 `client.responses.create(model="muse-spark-1.3-contributor", input="你好", max_output_tokens=2048)`。真实联调脚本为 `python examples/responses_live_smoke.py`。
 
-此入口直接保留原生 input、instructions、tools、reasoning、include、text、metadata 等字段及未来字段，不经过 Messages/Chat 转换。仅按现有固定模型或别名配置替换请求 model；响应 model 保留上游实际值。沿用出站代理、密钥、会话头优先级与完整请求文件日志。
+路由到 Responses 上游时，此入口直接保留原生 input、instructions、tools、reasoning、include、text、metadata 等字段及未来字段，不经过 Messages/Chat 转换。仅按模型配置替换请求 model；响应 model 保留上游实际值。沿用出站代理、密钥、会话头优先级与完整请求文件日志。路由到其他协议时执行上述共同能力转换与校验。
 
 流式事件原样转发并及时刷新，保留事件名、sequence_number、推理载体和工具参数；不补造结束事件。普通 JSON 原样返回；若上游强制 SSE，则取终态 response 返回 JSON。HTTP 错误保留上游状态码和响应体。此处只接入 POST 创建接口，检索、取消、删除等 Responses 子接口尚未接入；store、previous_response_id、background 等能力取决于上游实际支持。
 

@@ -1,21 +1,45 @@
-# 复制为 config.yaml。环境变量覆盖文件字段，修改后需要重启网关。
+# 复制为 config.yaml。修改后需要重启网关。
+# 此示例使用一个 Responses 上游；可添加多个相同或不同协议的服务。
 server:
   addr: "127.0.0.1:8176"
   read_header_timeout: "10s"
   shutdown_timeout: "5s"
 
-upstream:
-  base_url: "https://opencode.ai/zen/go/v1"
-  api_key: "" # 必填；推荐通过 OPENAI_API_KEY 环境变量提供
-  model: "muse-spark-1.3-contributor" # 空字符串表示使用客户端模型名
-  # 空字符串取消显式代理，仍遵循 HTTP_PROXY / HTTPS_PROXY / NO_PROXY。
-  proxy_url: "http://127.0.0.1:1080"
+upstreams:
+  responses-main:
+    protocol: openai-responses
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key_env: "OPENAI_API_KEY" # 或使用 api_key，二者只能配置一个
+    # 空字符串取消显式代理，仍遵循 HTTP_PROXY / HTTPS_PROXY / NO_PROXY。
+    proxy_url: "http://127.0.0.1:1080"
+    models:
+      - name: "muse-spark-1.3-contributor" # 下游请求使用此公开名，全局唯一
+        model: "muse-spark-1.3-contributor" # 此上游的真实模型 ID
+
+  # chat-main:
+  #   protocol: openai-compatible
+  #   base_url: "https://chat.example.com/v1" # 改为实际 Chat Completions 服务
+  #   api_key_env: "CHAT_API_KEY"
+  #   proxy_url: ""
+  #   models:
+  #     - name: coding
+  #       model: "your-chat-model"
+  #     - name: coding-fast
+  #       model: "your-fast-model"
+
+  # anthropic-main:
+  #   protocol: anthropic
+  #   base_url: "https://api.anthropic.com/v1"
+  #   api_key_env: "ANTHROPIC_API_KEY"
+  #   anthropic_version: "2023-06-01" # 按目标服务要求配置
+  #   models:
+  #     - name: reasoning
+  #       model: "your-claude-model"
 
 auth:
   gateway_api_key: "" # 空字符串表示不验证本地客户端密钥
 
 models:
-  aliases: {} # 例如 {claude-compatible: your-upstream-model}；别名优先于固定模型
   reasoning_efforts: [] # 可选：none、minimal、low、medium、high、xhigh
   model_reasoning_efforts: {} # 例如 {your-upstream-model: [low, medium, high]}
 

@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +15,10 @@ import (
 // responses forwards the native protocol without narrowing its fields through
 // either the Messages or Chat Completions compatibility representation.
 func (h *handler) responses(w http.ResponseWriter, r *http.Request, raw []byte, model string) {
+	h.nativeResponse(w, r, raw, model, h.endpoint)
+}
+
+func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []byte, model, endpoint string) {
 	var root map[string]json.RawMessage
 	var request struct {
 		Model  string `json:"model"`
@@ -26,12 +32,25 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request, raw []byte, 
 		root["model"], _ = json.Marshal(model)
 		raw, _ = json.Marshal(root)
 	}
-	endpoint := h.endpoint
+	if r.URL.Path == "/v1/messages/count_tokens" {
+		delete(root, "stream")
+		raw, _ = json.Marshal(root)
+		request.Stream = false
+	}
+	native, _ := r.Context().Value(nativeUpstreamKey{}).(bool)
+	if !native && h.protocol != "" && h.protocol != "openai-responses" {
+		r = r.WithContext(context.WithValue(r.Context(), responseModelKey{}, request.Model))
+	}
 	if r.URL.RawQuery != "" {
 		endpoint += "?" + r.URL.RawQuery
 	}
 	resp, err := h.do(r, http.MethodPost, endpoint, raw, request.Stream)
 	if err != nil {
+		var invalid *requestEncodingError
+		if errors.As(err, &invalid) {
+			writeError(w, 400, "invalid_request_error", invalid.Error())
+			return
+		}
 		if r.Context().Err() == nil {
 			writeError(w, 502, "api_error", "upstream connection failed")
 		}
@@ -41,6 +60,13 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request, raw []byte, 
 	copyResponseHeaders(w, resp)
 	isSSE := strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if !success {
+		count := r.URL.Path == "/v1/messages/count_tokens"
+		if (!native && h.protocol != "" && h.protocol != "openai-responses") || (count && (resp.StatusCode == 404 || resp.StatusCode == 405 || resp.StatusCode == 501)) {
+			h.upstreamError(w, resp, count)
+			return
+		}
+	}
 	if success && request.Stream {
 		if !isSSE {
 			writeError(w, 502, "api_error", "upstream did not return an SSE stream")
@@ -56,7 +82,34 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request, raw []byte, 
 	}
 	var body []byte
 	if success && isSSE {
+		native, _ := r.Context().Value(nativeUpstreamKey{}).(bool)
+		if native && h.protocol != "openai-responses" {
+			resp, err = normalizeUpstreamResponse(resp, translate.Protocol(h.protocol), "")
+			if err != nil {
+				writeDetailedError(w, err)
+				return
+			}
+			defer resp.Body.Close()
+		}
 		body, err = translate.AggregateStream(resp.Body)
+		if err == nil && native && h.protocol != "openai-responses" {
+			var source struct{ ID, Model string }
+			_ = json.Unmarshal(body, &source)
+			if h.protocol == "openai-compatible" {
+				body, err = translate.ConvertResponseForChat(body, source.Model)
+				if err == nil {
+					body, err = translate.ChatResponse(body)
+				}
+			} else {
+				body, err = translate.ConvertResponse(body, source.Model)
+			}
+			if err == nil {
+				var result map[string]json.RawMessage
+				_ = json.Unmarshal(body, &result)
+				result["id"], _ = json.Marshal(source.ID)
+				body, err = json.Marshal(result)
+			}
+		}
 	} else {
 		body, err = io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
 		if len(body) > 32<<20 {

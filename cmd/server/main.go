@@ -91,7 +91,19 @@ func newServer(c config.Config) (*http.Server, error) {
 	if c.Logging.Requests.Enabled {
 		logDir = c.Logging.Requests.Dir
 	}
+	var upstreams map[string]gateway.Upstream
+	if c.Upstreams != nil {
+		upstreams = map[string]gateway.Upstream{}
+		for name, u := range c.Upstreams {
+			models := make([]gateway.Model, 0, len(u.Models))
+			for _, m := range u.Models {
+				models = append(models, gateway.Model{Name: m.Name, Model: m.Model})
+			}
+			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models}
+		}
+	}
 	handler, err := gateway.New(gateway.Config{
+		Upstreams:     upstreams,
 		RequestLogDir: logDir,
 		ProxyURL:      c.Upstream.ProxyURL,
 		BaseURL:       c.Upstream.BaseURL, APIKey: c.Upstream.APIKey, Model: c.Upstream.Model,

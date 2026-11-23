@@ -17,6 +17,7 @@ import (
 )
 
 type Config struct {
+	Upstreams                          map[string]Upstream
 	BaseURL, APIKey, Model, GatewayKey string
 	ProxyURL                           string
 	RequestLogDir                      string
@@ -26,12 +27,18 @@ type Config struct {
 	ModelReasoningEfforts              map[string][]string
 }
 type handler struct {
-	config   Config
-	endpoint string
-	client   *http.Client
+	config                                   Config
+	endpoint                                 string
+	client                                   *http.Client
+	routes                                   Router
+	upstreams                                map[string]*handler
+	upstreamName, protocol, anthropicVersion string
 }
 
 func New(config Config) (http.Handler, error) {
+	if config.Upstreams != nil {
+		return newMultiUpstream(config)
+	}
 	u, err := url.Parse(config.BaseURL)
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("OPENAI_BASE_URL must be an absolute HTTP(S) URL without credentials, query or fragment")
@@ -120,6 +127,46 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Stream bool   `json:"stream"`
 	}
 	_ = json.Unmarshal(raw, &request)
+	if h.routes != nil {
+		if err := json.Unmarshal(raw, &request); err != nil || strings.TrimSpace(request.Model) == "" {
+			writeError(w, 400, "invalid_request_error", "a JSON object with model and boolean stream is required")
+			return
+		}
+		route, err := h.routes.Resolve(request.Model)
+		if err != nil {
+			body := errorBody("invalid_request_error", "model is not configured")
+			body["error"].(map[string]any)["code"] = "model_not_found"
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
+		selected := *h.upstreams[route.Upstream]
+		selected.config.Model = route.Model
+		h = &selected
+		if protocolForPath(r.URL.Path) == h.protocol && !count {
+			r = r.WithContext(context.WithValue(r.Context(), nativeUpstreamKey{}, true))
+			h.nativeResponse(w, r, raw, route.Model, h.upstreamEndpoint())
+			return
+		}
+		if count && h.protocol != "openai-responses" {
+			if h.protocol == "openai-compatible" {
+				writeError(w, 501, "not_supported_error", "upstream does not support exact input token counting")
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), nativeUpstreamKey{}, true))
+			h.nativeResponse(w, r, raw, route.Model, h.upstreamEndpoint()+"/count_tokens")
+			return
+		}
+		if r.URL.RawQuery != "" {
+			writeError(w, 400, "invalid_request_error", "query parameters are unsupported across upstream protocols")
+			return
+		}
+		if err := validateCrossProtocolRequest(raw, h.protocol, protocolForPath(r.URL.Path)); err != nil {
+			writeError(w, 400, "invalid_request_error", err.Error())
+			return
+		}
+	}
 	if count {
 		var v map[string]any
 		if json.Unmarshal(raw, &v) == nil && v != nil {
@@ -178,6 +225,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.do(r, http.MethodPost, endpoint, body, request.Stream && !count)
 	if err != nil {
+		var invalid *requestEncodingError
+		if errors.As(err, &invalid) {
+			writeError(w, 400, "invalid_request_error", invalid.Error())
+			return
+		}
 		if r.Context().Err() == nil {
 			writeError(w, 502, "api_error", "upstream connection failed")
 		}
@@ -273,11 +325,29 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(converted)
 }
 func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stream bool) (*http.Response, error) {
+	native, _ := r.Context().Value(nativeUpstreamKey{}).(bool)
+	adapt := h.protocol != "" && h.protocol != "openai-responses" && !native
+	if adapt {
+		if r.URL.RawQuery != "" {
+			return nil, &requestEncodingError{fmt.Errorf("query parameters are unsupported across upstream protocols")}
+		}
+		var err error
+		body, err = translate.EncodeUpstreamRequest(translate.Protocol(h.protocol), body)
+		if err != nil {
+			return nil, &requestEncodingError{err}
+		}
+		endpoint = h.upstreamEndpoint()
+	}
 	req, err := http.NewRequestWithContext(r.Context(), method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+h.config.APIKey)
+	if h.protocol == "anthropic" {
+		req.Header.Set("x-api-key", h.config.APIKey)
+		req.Header.Set("anthropic-version", h.anthropicVersion)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+h.config.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if req.URL.Hostname() == "opencode.ai" {
 		req.Header.Set("User-Agent", "ai-gateway-go/1.0")
@@ -289,7 +359,12 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 	}
 	h.logRequest(req, "upstream", body)
 	req = h.traceRequestHeaders(req, body)
-	return h.client.Do(req)
+	resp, err := h.client.Do(req)
+	if err != nil || !adapt || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp, err
+	}
+	publicModel, _ := r.Context().Value(responseModelKey{}).(string)
+	return normalizeUpstreamResponse(resp, translate.Protocol(h.protocol), publicModel)
 }
 func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 	id := resp.Header.Get("x-request-id")

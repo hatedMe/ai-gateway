@@ -76,7 +76,9 @@ func (h *handler) logRequestHeaders(r *http.Request, stage string, body []byte, 
 		RawBody      string      `json:"raw_body"`
 		BodyBytes    int         `json:"body_bytes"`
 		HeaderSource string      `json:"header_source"`
-	}{time.Now().Format(time.RFC3339Nano), id, stage, r.Method, r.URL.Scheme + "://" + r.URL.Host + r.URL.EscapedPath(), query, headers, content, string(body), len(body), source}
+		Upstream     string      `json:"upstream,omitempty"`
+		Protocol     string      `json:"upstream_protocol,omitempty"`
+	}{time.Now().Format(time.RFC3339Nano), id, stage, r.Method, r.URL.Scheme + "://" + r.URL.Host + r.URL.EscapedPath(), query, headers, content, string(body), len(body), source, h.upstreamName, h.protocol}
 	if r.URL.Scheme == "" {
 		record.URL = r.URL.EscapedPath()
 	}
