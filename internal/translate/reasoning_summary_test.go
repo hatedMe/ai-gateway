@@ -13,7 +13,7 @@ func TestReasoningSummaryParity(t *testing.T) {
 	const answer = "结论"
 	wantOutput := []any{
 		map[string]any{"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": summary}}},
-		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": answer}}},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": answer, "annotations": []any{}}}},
 	}
 	assertOutput := func(t *testing.T, response map[string]any) {
 		t.Helper()

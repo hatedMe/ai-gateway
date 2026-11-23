@@ -92,7 +92,7 @@ func DecodeUpstreamResponseWithContext(raw []byte, c *ConversionContext) ([]byte
 					delete(item, "summary")
 					item["type"] = "message"
 					item["role"] = "assistant"
-					item["content"] = []object{{"type": "output_text", "text": text}}
+					item["content"] = []object{{"type": "output_text", "text": text, "annotations": []object{}}}
 				}
 			}
 			root["output"] = visible

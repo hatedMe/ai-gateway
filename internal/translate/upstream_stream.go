@@ -14,6 +14,7 @@ type normalizedStream struct {
 	closed            map[int]bool
 	usage             object
 	usageState        usageMerger
+	createdAt         int64
 	sequence          int
 	bytes             int
 	buffers           map[int]*strings.Builder
@@ -42,13 +43,16 @@ func (s *normalizedStream) start(id, model string) error {
 	if s.bytes > 32<<20 {
 		return fmt.Errorf("upstream stream content exceeds 32 MiB")
 	}
+	if s.createdAt == 0 {
+		s.createdAt, _ = responseCreationTime(object{}, "stream")
+	}
 	s.id = id
 	s.model = model
 	usage := object{}
 	for k, v := range s.usage {
 		usage[k] = v
 	}
-	return s.event("response.created", object{"response": object{"id": id, "model": model, "status": "in_progress", "output": []object{}, "usage": usage}})
+	return s.event("response.created", object{"response": object{"created_at": s.createdAt, "id": id, "model": model, "status": "in_progress", "output": []object{}, "usage": usage}})
 }
 func (s *normalizedStream) add(key int, item object) (int, error) {
 	if s.id == "" {
@@ -61,6 +65,7 @@ func (s *normalizedStream) add(key int, item object) (int, error) {
 		return 0, fmt.Errorf("upstream stream item limit exceeded")
 	}
 	index := len(s.output)
+	responseItemFields(item, s.id, index, "in_progress")
 	s.keys[key] = index
 	s.output = append(s.output, item)
 	if s.buffers == nil {
@@ -71,12 +76,12 @@ func (s *normalizedStream) add(key int, item object) (int, error) {
 		return 0, err
 	}
 	if item["type"] == "reasoning" {
-		if err := s.event("response.reasoning_summary_part.added", object{"output_index": index, "summary_index": 0, "part": object{"type": "summary_text", "text": ""}}); err != nil {
+		if err := s.event("response.reasoning_summary_part.added", object{"output_index": index, "summary_index": 0, "item_id": item["id"], "part": object{"type": "summary_text", "text": ""}}); err != nil {
 			return 0, err
 		}
 	}
 	if item["type"] == "message" {
-		if err := s.event("response.content_part.added", object{"output_index": index, "content_index": 0, "part": item["content"].([]object)[0]}); err != nil {
+		if err := s.event("response.content_part.added", object{"output_index": index, "content_index": 0, "item_id": item["id"], "part": item["content"].([]object)[0]}); err != nil {
 			return 0, err
 		}
 	}
@@ -133,7 +138,7 @@ func (s *normalizedStream) complete() error {
 		return &ConversionError{Code: "incomplete_stream", Stage: "stream", Description: "upstream stream has no terminal reason"}
 	}
 	status := "completed"
-	response := object{"id": s.id, "object": "response", "model": s.model, "output": s.output, "usage": s.usage}
+	response := object{"created_at": s.createdAt, "id": s.id, "object": "response", "model": s.model, "output": s.output, "usage": s.usage}
 	if s.finish == "refusal" {
 		response["stop_reason"] = "refusal"
 	}
@@ -220,6 +225,13 @@ func decodeUpstreamStream(protocol Protocol, src io.Reader, emit func(string, an
 		if protocol == ChatProtocol {
 			id, _ := root["id"].(string)
 			model, _ := root["model"].(string)
+			if s.id == "" {
+				var err error
+				s.createdAt, err = responseCreationTime(root, "stream")
+				if err != nil {
+					return false, err
+				}
+			}
 			if err := s.start(id, model); err != nil {
 				return false, err
 			}

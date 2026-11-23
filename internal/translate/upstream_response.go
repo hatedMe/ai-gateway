@@ -17,7 +17,11 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 	if id == "" {
 		return nil, fmt.Errorf("missing upstream response id")
 	}
-	result := object{"id": id, "object": "response", "model": root["model"], "status": "completed"}
+	created, err := responseCreationTime(root, "response")
+	if err != nil {
+		return nil, err
+	}
+	result := object{"created_at": created, "id": id, "object": "response", "model": root["model"], "status": "completed"}
 	output := []object{}
 	usage := object{"input_tokens": 0, "output_tokens": 0}
 	finish := ""
@@ -127,6 +131,9 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 	}
 	if err := validateOutputTools(output, "response"); err != nil {
 		return nil, err
+	}
+	for index, item := range output {
+		responseItemFields(item, id, index, result["status"].(string))
 	}
 	result["output"] = output
 	result["usage"] = usage
