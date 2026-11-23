@@ -16,6 +16,7 @@ func (h *handler) conversionError(w http.ResponseWriter, r *http.Request, status
 	}
 	h.logConversionFailure(r, conversion)
 	body := errorBody(errorType(status), conversion.Description)
+	body["request_id"] = w.Header().Get("request-id")
 	detail := body["error"].(map[string]any)
 	detail["code"], detail["stage"], detail["field"] = conversion.Code, conversion.Stage, conversion.Field
 	w.Header().Set("Content-Type", "application/json")

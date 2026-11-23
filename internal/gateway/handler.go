@@ -209,6 +209,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		route, err := h.routes.Resolve(request.Model)
 		if err != nil {
 			body := errorBody("invalid_request_error", "model is not configured")
+			body["request_id"] = w.Header().Get("request-id")
 			body["error"].(map[string]any)["code"] = "model_not_found"
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)

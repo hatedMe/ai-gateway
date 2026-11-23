@@ -55,7 +55,7 @@ func (w *accessWriter) WriteHeader(status int) {
 	first := w.record.Status == 0
 	if first {
 		w.record.Status = status
-		if status >= 400 {
+		if status >= 400 && w.record.Outcome == "success" {
 			w.record.Outcome = "http_error"
 		}
 		if status == 504 {
