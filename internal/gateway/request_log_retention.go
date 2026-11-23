@@ -140,11 +140,6 @@ func (s *requestLogStore) write(id string, files map[string][]byte) error {
 	if err := os.MkdirAll(s.dir, 0700); err != nil {
 		return err
 	}
-	if g == nil {
-		g = &logGroup{id: id, time: time.Now(), files: map[string]int64{}}
-		s.groups[id] = g
-		s.order = append(s.order, g)
-	}
 	for suffix, raw := range files {
 		name := id + "_" + suffix
 		path := filepath.Join(s.dir, name)
@@ -155,6 +150,18 @@ func (s *requestLogStore) write(id string, files map[string][]byte) error {
 		}
 		n, writeErr := f.Write(raw)
 		closeErr := f.Close()
+		if n == 0 && (writeErr != nil || closeErr != nil) {
+			_ = os.Remove(path)
+			if writeErr != nil {
+				return writeErr
+			}
+			return closeErr
+		}
+		if g == nil {
+			g = &logGroup{id: id, time: time.Now(), files: map[string]int64{}}
+			s.groups[id] = g
+			s.order = append(s.order, g)
+		}
 		g.files[name] = int64(n)
 		g.bytes += int64(n)
 		s.total += int64(n)

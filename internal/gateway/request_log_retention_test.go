@@ -73,3 +73,23 @@ func TestRequestLogConcurrentCapacity(t *testing.T) {
 		t.Fatal("concurrent writes exceeded capacity", total)
 	}
 }
+
+func TestRequestLogFailureDoesNotRetainEmptyGroups(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newRequestLogStore(dir, 100, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("req_%032x", i)
+		if err := os.Mkdir(filepath.Join(dir, id+"_inbound.http"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.write(id, map[string][]byte{"inbound.http": []byte("data")}); err == nil {
+			t.Fatal("unexpected write success")
+		}
+	}
+	if len(store.groups) != 0 || len(store.order) != 0 {
+		t.Fatalf("failed writes retained groups=%d order=%d", len(store.groups), len(store.order))
+	}
+}
