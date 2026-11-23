@@ -69,3 +69,21 @@ func TestConversionErrorKeepsRequestIDAndOutcome(t *testing.T) {
 		t.Fatalf("%d %s %s", w.Code, w.Body.String(), logs.String())
 	}
 }
+
+func TestStreamConversionLogIdentifiesRejectedField(t *testing.T) {
+	var logs bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(old)
+	h := compatibilityHandler(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"chat_test\",\"choices\":[{\"index\":0,\"delta\":{\"provider_metadata\":{\"private\":\"do-not-log-payload\"}},\"finish_reason\":null}]}\n\n")
+	})
+	w := compatibilitySend(t, h, "openai-responses", compatibilityRequest("openai-responses", true, []string{"lookup"}))
+	if !strings.Contains(w.Body.String(), `"field":"provider_metadata"`) || strings.Contains(w.Body.String(), "response.completed") {
+		t.Fatalf("rejected field diagnostics lost: %s", w.Body.String())
+	}
+	if !strings.Contains(logs.String(), `conversion_field="provider_metadata"`) || strings.Contains(logs.String(), "do-not-log-payload") {
+		t.Fatalf("log must identify field without its value: %s", logs.String())
+	}
+}

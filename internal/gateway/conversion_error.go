@@ -34,5 +34,9 @@ func (h *handler) logConversionFailure(r *http.Request, err error) {
 		return
 	}
 	id, _ := r.Context().Value(requestIDKey{}).(string)
-	log.Printf("conversion failed request_id=%s upstream=%s upstream_protocol=%s conversion_stage=%s conversion_code=%s", id, h.upstreamName, h.protocol, conversion.Stage, conversion.Code)
+	field := conversion.Field
+	if len(field) > 128 {
+		field = field[:128] + "..."
+	}
+	log.Printf("conversion failed request_id=%s upstream=%s upstream_protocol=%s conversion_stage=%s conversion_code=%s conversion_field=%q", id, h.upstreamName, h.protocol, conversion.Stage, conversion.Code, field)
 }
