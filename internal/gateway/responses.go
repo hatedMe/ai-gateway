@@ -96,6 +96,10 @@ func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []b
 		// Flush each upstream read; preserve event names, payloads, and order.
 		if _, err := io.Copy(flushingWriter{w, http.NewResponseController(w)}, resp.Body); err != nil {
 			setOutcome(r, "stream_error")
+			// Returning normally would send a successful HTTP transport terminator.
+			if native || h.protocol == "" || h.protocol == "openai-responses" {
+				panic(http.ErrAbortHandler)
+			}
 		}
 		return
 	}

@@ -164,3 +164,46 @@ func TestHTTP2WriteDeadlineDoesNotExpireBetweenEvents(t *testing.T) {
 		t.Fatalf("healthy interval aborted: %v %s", err, body)
 	}
 }
+
+func TestNativeStreamTimeoutAbortsTransport(t *testing.T) {
+	for _, http2 := range []bool{false, true} {
+		t.Run(fmt.Sprint(http2), func(t *testing.T) {
+			closed := make(chan struct{})
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(closed)
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: first\n\n")
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			defer up.Close()
+			h, _ := New(Config{BaseURL: up.URL, APIKey: "test", ReadIdleTimeout: 40 * time.Millisecond, MaxConcurrentRequests: 1})
+			s := httptest.NewUnstartedServer(h)
+			s.EnableHTTP2 = http2
+			if http2 {
+				s.StartTLS()
+			} else {
+				s.Start()
+			}
+			defer s.Close()
+			resp, err := s.Client().Post(s.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err == nil {
+				t.Fatalf("truncated native stream ended successfully: %s", body)
+			}
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				t.Fatal("upstream not closed")
+			}
+			if len(h.(*handler).slots) != 0 {
+				t.Fatal("native stream leaked admission slot")
+			}
+		})
+	}
+}
