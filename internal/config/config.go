@@ -23,12 +23,13 @@ import (
 type Config struct {
 	Upstreams map[string]UpstreamConfig `yaml:"upstreams"`
 	Server    struct {
-		Addr              string        `yaml:"addr"`
-		ReadBodyTimeout   time.Duration `yaml:"read_body_timeout"`
-		WriteIdleTimeout  time.Duration `yaml:"write_idle_timeout"`
-		IdleTimeout       time.Duration `yaml:"idle_timeout"`
-		ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
-		ShutdownTimeout   time.Duration `yaml:"shutdown_timeout"`
+		MaxConcurrentRequests int           `yaml:"max_concurrent_requests"`
+		Addr                  string        `yaml:"addr"`
+		ReadBodyTimeout       time.Duration `yaml:"read_body_timeout"`
+		WriteIdleTimeout      time.Duration `yaml:"write_idle_timeout"`
+		IdleTimeout           time.Duration `yaml:"idle_timeout"`
+		ReadHeaderTimeout     time.Duration `yaml:"read_header_timeout"`
+		ShutdownTimeout       time.Duration `yaml:"shutdown_timeout"`
 	} `yaml:"server"`
 	Upstream struct {
 		ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"`
@@ -59,6 +60,7 @@ type Config struct {
 // directory when loaded, otherwise the current working directory.
 func Load(path string, explicit bool) (Config, error) {
 	var c Config
+	c.Server.MaxConcurrentRequests = 64
 	c.Server.Addr = "127.0.0.1:8176"
 	c.Server.ReadHeaderTimeout = 10 * time.Second
 	c.Server.ShutdownTimeout = 5 * time.Second
@@ -308,6 +310,9 @@ func (c *Config) applyEnv() error {
 }
 
 func (c Config) Validate() error {
+	if c.Server.MaxConcurrentRequests <= 0 {
+		return fmt.Errorf("server.max_concurrent_requests: must be positive")
+	}
 	_, port, err := net.SplitHostPort(c.Server.Addr)
 	if err != nil {
 		return fmt.Errorf("server.addr: expected host:port")

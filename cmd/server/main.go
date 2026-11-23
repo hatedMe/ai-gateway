@@ -120,8 +120,9 @@ func newServer(c config.Config) (*http.Server, error) {
 		}
 	}
 	handler, err := gateway.New(gateway.Config{
-		Upstreams:       upstreams,
-		ReadBodyTimeout: c.Server.ReadBodyTimeout, WriteIdleTimeout: c.Server.WriteIdleTimeout, ResponseHeaderTimeout: c.Upstream.ResponseHeaderTimeout, ReadIdleTimeout: c.Upstream.ReadIdleTimeout,
+		MaxConcurrentRequests: c.Server.MaxConcurrentRequests,
+		Upstreams:             upstreams,
+		ReadBodyTimeout:       c.Server.ReadBodyTimeout, WriteIdleTimeout: c.Server.WriteIdleTimeout, ResponseHeaderTimeout: c.Upstream.ResponseHeaderTimeout, ReadIdleTimeout: c.Upstream.ReadIdleTimeout,
 		RequestLogDir: logDir,
 		ProxyURL:      c.Upstream.ProxyURL,
 		BaseURL:       c.Upstream.BaseURL, APIKey: c.Upstream.APIKey, Model: c.Upstream.Model,

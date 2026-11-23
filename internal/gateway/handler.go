@@ -18,6 +18,7 @@ import (
 )
 
 type Config struct {
+	MaxConcurrentRequests                                                     int
 	ReadBodyTimeout, WriteIdleTimeout, ResponseHeaderTimeout, ReadIdleTimeout time.Duration
 	Upstreams                                                                 map[string]Upstream
 	BaseURL, APIKey, Model, GatewayKey                                        string
@@ -29,6 +30,7 @@ type Config struct {
 	ModelReasoningEfforts                                                     map[string][]string
 }
 type handler struct {
+	slots                                    chan struct{}
 	config                                   Config
 	capabilities                             translate.ModelCapabilities
 	endpoint                                 string
@@ -39,6 +41,12 @@ type handler struct {
 }
 
 func New(config Config) (http.Handler, error) {
+	if config.MaxConcurrentRequests == 0 {
+		config.MaxConcurrentRequests = 64
+	}
+	if config.MaxConcurrentRequests < 0 {
+		return nil, fmt.Errorf("max concurrent requests must be positive")
+	}
 	if config.ReadBodyTimeout == 0 {
 		config.ReadBodyTimeout = 30 * time.Second
 	}
@@ -52,7 +60,12 @@ func New(config Config) (http.Handler, error) {
 		config.ReadIdleTimeout = 120 * time.Second
 	}
 	if config.Upstreams != nil {
-		return newMultiUpstream(config)
+		built, err := newMultiUpstream(config)
+		if err != nil {
+			return nil, err
+		}
+		built.slots = make(chan struct{}, config.MaxConcurrentRequests)
+		return built, nil
 	}
 	u, err := url.Parse(config.BaseURL)
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -83,7 +96,7 @@ func New(config Config) (http.Handler, error) {
 		client.Transport = transport
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &handler{config: config, endpoint: strings.TrimRight(config.BaseURL, "/") + "/responses", client: &client}, nil
+	return &handler{slots: make(chan struct{}, config.MaxConcurrentRequests), config: config, endpoint: strings.TrimRight(config.BaseURL, "/") + "/responses", client: &client}, nil
 }
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w = deadlineWriter{w, h.config.WriteIdleTimeout}
@@ -118,6 +131,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Close = true
 			w.Header().Set("Connection", "close")
 			writeError(w, 401, "authentication_error", "invalid gateway API key")
+			return
+		}
+	}
+	if !models || len(h.config.ModelAliases) == 0 {
+		slots := h.slots
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		default:
+			r.Close = true
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Retry-After", "1")
+			writeError(w, 503, "overloaded_error", "gateway concurrency limit reached")
 			return
 		}
 	}

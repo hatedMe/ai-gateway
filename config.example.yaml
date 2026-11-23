@@ -1,6 +1,7 @@
 # 复制为 config.yaml。修改后需要重启网关。
 # 此示例使用一个 Responses 上游；可添加多个相同或不同协议的服务。
 server:
+  max_concurrent_requests: 64
   addr: "127.0.0.1:8176"
   read_header_timeout: "10s"
   shutdown_timeout: "5s"

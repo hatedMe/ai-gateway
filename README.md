@@ -505,3 +505,5 @@ go build -o bin/gateway.exe ./cmd/server
 `Responses` 转换为 Messages/Chat 时，保留状态（正文、工具身份、推理与待发数据）共用 32 MiB 预算，输出项、内容块及待发事件分别最多 32768 个；超限终止转换，不发送成功终态。原生 SSE 透传不累计保存全文。
 
 超时配置：`server.read_body_timeout` 默认 30s；`server.write_idle_timeout` 默认 60s，按次写入续期；`server.idle_timeout` 默认 120s。旧 `upstream` 和各 `upstreams.<name>` 的 `response_header_timeout` 默认 60s、`read_idle_timeout` 默认 120s，后者仅计算等待响应体读取的时间，不计算下游背压。时长必须为正。正文读取超时返回 408，上游超时在响应尚未提交时返回 504；已开始的流报协议错误或关闭原生连接，不补成功终态。没有整条 SSE 总时长限制。
+
+`server.max_concurrent_requests` 默认 64，必须为正整数；所有上游共享活跃调用上限，流结束或取消后释放。超限立即返回 503 和 `Retry-After: 1`，不排队、不读取业务正文。本地配置模型查询不占用名额。
