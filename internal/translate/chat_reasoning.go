@@ -5,6 +5,18 @@ import (
 	"strings"
 )
 
+func emptyChatDelta(delta object) bool {
+	for _, field := range []string{"content", "refusal", "reasoning_content"} {
+		if text, _ := delta[field].(string); text != "" {
+			return false
+		}
+	}
+	if calls, _ := delta["tool_calls"].([]any); len(calls) > 0 {
+		return false
+	}
+	return true
+}
+
 // Some Chat providers expose readable reasoning under an alias and repeat it
 // in reasoning_details. Normalize only readable text, never opaque replay state.
 func normalizeChatReasoning(message object, stage string) error {

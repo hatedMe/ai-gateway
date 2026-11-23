@@ -69,3 +69,43 @@ func TestChatStreamReadableReasoningAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestChatStreamRepeatedFinishWithUsage(t *testing.T) {
+	for _, reason := range []string{"stop", "length"} {
+		t.Run(reason, func(t *testing.T) {
+			terminal := `{"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":null},"finish_reason":"` + reason + `"}]}`
+			tail := `{"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"` + reason + `"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`
+			events, err := collectStream(t, chatFrames(streamChunk(`{"content":"OK"}`), terminal, tail, "[DONE]"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, event := range events {
+				if event["type"] == "response.completed" || event["type"] == "response.incomplete" {
+					count++
+					response := event["response"].(map[string]any)
+					usage := response["usage"].(map[string]any)
+					if usage["input_tokens"] != float64(7) || usage["output_tokens"] != float64(3) {
+						t.Fatal("usage tail lost", usage)
+					}
+				}
+			}
+			if count != 1 {
+				t.Fatal("terminal count", count)
+			}
+			if _, err := collectStream(t, chatFrames(streamChunk(`{"content":"OK"}`), terminal, tail)); err == nil {
+				t.Fatal("usage tail substituted for missing DONE")
+			}
+		})
+	}
+	for _, tail := range []string{
+		`{"id":"c","choices":[{"index":0,"delta":{"content":"late"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`,
+		`{"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`,
+		`{"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	} {
+		terminal := `{"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+		if _, err := collectStream(t, chatFrames(streamChunk(`{"content":"OK"}`), terminal, tail, "[DONE]")); err == nil {
+			t.Fatal("late content or invalid repeated finish accepted")
+		}
+	}
+}

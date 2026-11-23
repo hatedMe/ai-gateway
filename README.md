@@ -516,3 +516,4 @@ go build -o bin/gateway.exe ./cmd/server
 
 本地命令：`go test ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`；Linux 使用 `GOARCH=amd64 CGO_ENABLED=1 go test -race ./...`。模糊测试分别运行 `go test ./internal/translate -run '^$' -fuzz '^FuzzSSE$' -fuzztime=10s -parallel=2` 与同参数的 `FuzzRequestConversion`。所有基础测试使用本地模拟上游，不需要真实密钥。
 Chat 上游可读推理兼容 `reasoning_content`、`reasoning` 以及 `reasoning_details` 中的 `reasoning.text`。同一分片的重复文本只输出一次，冲突文本、非文本详情、签名和加密详情仍拒绝跨协议转换。
+Chat 流的 usage 尾帧可重复同一 finish_reason，并携带 assistant 角色及空内容；它只更新统计，不生成重复终态。仍需显式 [DONE]，结束原因冲突、无 usage 的重复结束帧或结束后追加内容仍报错。

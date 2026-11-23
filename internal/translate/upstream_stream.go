@@ -271,8 +271,17 @@ func decodeUpstreamStream(protocol Protocol, src io.Reader, emit func(string, an
 			if err := validateChatContent(delta, "stream"); err != nil {
 				return false, err
 			}
-			if s.finish != "" && len(delta) > 0 {
-				return false, fmt.Errorf("delta after finish reason")
+			if s.finish != "" {
+				if !emptyChatDelta(delta) {
+					return false, fmt.Errorf("delta after finish reason")
+				}
+				if reason, _ := choice["finish_reason"].(string); reason != "" {
+					usage, _ := root["usage"].(map[string]any)
+					if reason != s.finish || len(usage) == 0 {
+						return false, fmt.Errorf("duplicate or conflicting finish reason")
+					}
+				}
+				return false, nil
 			}
 			for _, field := range []string{"reasoning_content", "content", "refusal"} {
 				if value, ok := delta[field].(string); ok {
