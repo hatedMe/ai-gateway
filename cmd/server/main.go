@@ -62,7 +62,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), terminationSignals()...)
 	defer stop()
 	stopped := make(chan struct{})
 	shutdownDone := make(chan struct{})
