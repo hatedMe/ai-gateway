@@ -61,9 +61,21 @@ func (w deadlineWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func (w deadlineWriter) renew() {
 	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout))
 }
-func (w deadlineWriter) WriteHeader(status int)      { w.renew(); w.ResponseWriter.WriteHeader(status) }
-func (w deadlineWriter) Write(p []byte) (int, error) { w.renew(); return w.ResponseWriter.Write(p) }
+func (w deadlineWriter) clear() {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Time{})
+}
+func (w deadlineWriter) WriteHeader(status int) {
+	w.renew()
+	defer w.clear()
+	w.ResponseWriter.WriteHeader(status)
+}
+func (w deadlineWriter) Write(p []byte) (int, error) {
+	w.renew()
+	defer w.clear()
+	return w.ResponseWriter.Write(p)
+}
 func (w deadlineWriter) FlushError() error {
 	w.renew()
+	defer w.clear()
 	return http.NewResponseController(w.ResponseWriter).Flush()
 }

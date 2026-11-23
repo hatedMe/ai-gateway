@@ -118,6 +118,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w = &accessWriter{ResponseWriter: w, record: record}
 	r = r.WithContext(context.WithValue(r.Context(), accessKey{}, record))
 	defer record.finish(r, w)
+	defer func() {
+		// Flush buffered JSON under the write timeout; aborts must stay aborts.
+		if failed := recover(); failed != nil {
+			panic(failed)
+		}
+		_ = http.NewResponseController(w).Flush()
+	}()
 	r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, w.Header().Get("request-id")))
 	chat := r.URL.Path == "/v1/chat/completions"
 	native := r.URL.Path == "/v1/responses"

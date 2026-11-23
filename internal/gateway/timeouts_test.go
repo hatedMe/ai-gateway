@@ -135,3 +135,32 @@ func TestReadIdleExcludesConsumerDelay(t *testing.T) {
 		t.Fatalf("consumer delay counted as upstream idle: %q %v", b, err)
 	}
 }
+
+func TestHTTP2WriteDeadlineDoesNotExpireBetweenEvents(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, "data: last\n\n")
+	}))
+	defer up.Close()
+	h, _ := New(Config{BaseURL: up.URL, APIKey: "test", WriteIdleTimeout: 25 * time.Millisecond, ReadIdleTimeout: time.Second})
+	s := httptest.NewUnstartedServer(h)
+	s.EnableHTTP2 = true
+	s.StartTLS()
+	defer s.Close()
+	resp, err := s.Client().Post(s.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Fatal("HTTP/2 not negotiated")
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || !strings.Contains(string(body), "data: last") {
+		t.Fatalf("healthy interval aborted: %v %s", err, body)
+	}
+}
