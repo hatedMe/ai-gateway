@@ -1,6 +1,9 @@
 package translate
 
 func validateChatContent(m object, stage string) error {
+	if err := normalizeChatReasoning(m, stage); err != nil {
+		return err
+	}
 	for key, value := range m {
 		if value == nil {
 			continue

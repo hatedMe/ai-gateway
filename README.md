@@ -515,3 +515,4 @@ go build -o bin/gateway.exe ./cmd/server
 自动检查：GitHub Actions 在 Linux/Windows 运行测试、构建和 vet，Linux 运行竞态检测及 SIGTERM 进程测试；模糊测试在 PR 短跑、定时任务长跑。Staticcheck 固定 v0.7.0，govulncheck 固定 v1.1.4，需使用当前 Go 工具链构建。staticcheck.conf 暂时排除 U1000，保留现有未使用的兼容辅助方法，不删除无关历史代码。其余默认检查保留。
 
 本地命令：`go test ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`；Linux 使用 `GOARCH=amd64 CGO_ENABLED=1 go test -race ./...`。模糊测试分别运行 `go test ./internal/translate -run '^$' -fuzz '^FuzzSSE$' -fuzztime=10s -parallel=2` 与同参数的 `FuzzRequestConversion`。所有基础测试使用本地模拟上游，不需要真实密钥。
+Chat 上游可读推理兼容 `reasoning_content`、`reasoning` 以及 `reasoning_details` 中的 `reasoning.text`。同一分片的重复文本只输出一次，冲突文本、非文本详情、签名和加密详情仍拒绝跨协议转换。
