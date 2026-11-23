@@ -276,7 +276,7 @@ signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、�
 
 开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。每个请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
 
-上游通过 httptrace 捕获传输层实际写出的请求头，包含自动添加的 Content-Length、Accept-Encoding 或 HTTP/2 伪头，header_source 为 transport。若连接失败、尚未发出请求，则保留 prepared 记录。`.http` 为便于查看的文本展示，不是 HTTP/2 帧或 TLS 抓包。转换/鉴权失败仍保留入站记录。认证头、Cookie 和敏感 query 值为 `[REDACTED]`；正文保持原样。日志目录已加入忽略列表。旧版生成的模型列表日志仍保留，新版不再新增。
+上游通过 httptrace 捕获传输层实际写出的请求头，包含自动添加的 Content-Length、Accept-Encoding 或 HTTP/2 伪头，header_source 为 transport。若连接失败、尚未发出请求，则保留 prepared 记录。`.http` 为便于查看的文本展示，不是 HTTP/2 帧或 TLS 抓包。鉴权在读取正文之前执行；鉴权失败不记录正文，并关闭连接以避免等待未发送的正文。已认证的转换失败请求仍保留入站记录。认证头、Cookie 和敏感 query 值为 `[REDACTED]`；正文保持原样。日志目录已加入忽略列表。旧版生成的模型列表日志仍保留，新版不再新增。
 
 收到 tool_use 后由客户端执行，将 assistant content 原样加入历史，再提交紧接的 user tool_result；多个调用全部回传，下轮继续提供工具定义。SSE 参数截断时须检查 stop_reason，不能执行不完整 JSON。
 

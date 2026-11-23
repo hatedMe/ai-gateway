@@ -94,6 +94,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 405, "invalid_request_error", method+" is required")
 		return
 	}
+	if h.config.GatewayKey != "" {
+		key := r.Header.Get("x-api-key")
+		if key == "" {
+			key = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		}
+		if subtle.ConstantTimeCompare([]byte(key), []byte(h.config.GatewayKey)) != 1 {
+			r.Close = true
+			w.Header().Set("Connection", "close")
+			writeError(w, 401, "authentication_error", "invalid gateway API key")
+			return
+		}
+	}
 	var raw []byte
 	var err error
 	if !models {
@@ -109,16 +121,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if h.config.GatewayKey != "" {
-		key := r.Header.Get("x-api-key")
-		if key == "" {
-			key = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		}
-		if subtle.ConstantTimeCompare([]byte(key), []byte(h.config.GatewayKey)) != 1 {
-			writeError(w, 401, "authentication_error", "invalid gateway API key")
-			return
-		}
-	}
+
 	if models {
 		h.models(w, r)
 		return

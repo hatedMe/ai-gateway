@@ -97,7 +97,7 @@ func TestRequestLogIncludesBothBodiesAndRedactedHeaders(t *testing.T) {
 	}
 }
 
-func TestRequestLogCapturesRejectedRequestVerbatim(t *testing.T) {
+func TestRequestLogCapturesAuthenticatedRejectedRequestVerbatim(t *testing.T) {
 	directory := t.TempDir()
 	h, err := New(Config{BaseURL: "http://unused.invalid/v1", APIKey: "secret", GatewayKey: "expected", RequestLogDir: directory})
 	if err != nil {
@@ -106,9 +106,10 @@ func TestRequestLogCapturesRejectedRequestVerbatim(t *testing.T) {
 	body := "{\n  \"model\" : \"original\", \"messages\" : []\n}"
 	r := httptest.NewRequest("POST", "/v1/messages?token=hidden&beta=true", strings.NewReader(body))
 	r.Header.Set("X-Debug", "visible")
+	r.Header.Set("x-api-key", "expected")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 401 {
+	if w.Code != 400 {
 		t.Fatal(w.Code)
 	}
 	files, _ := filepath.Glob(filepath.Join(directory, "*_inbound.json"))
