@@ -481,7 +481,7 @@ signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、�
 
 ## 日志、工具闭环和验证
 
-开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。正常出站的请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 包含时间、方法、URL、query、完整请求头、解析后的 body、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
+开发版记录 `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses`，不记录模型列表、详情或 token 计数。日志由 `logging.requests` 控制，默认目录为 `logs/requests/`；加载配置文件时相对该文件目录，否则相对工作目录。正常出站的请求生成同一 request_id 的四个文件：`_inbound.json/.http` 和 `_upstream.json/.http`。JSON 不再重复保存解析后的 body；包含时间、方法、URL、query、完整请求头、未改写的 raw_body 和实际 body_bytes；`.http` 直接展示请求行、请求头和原始入参。
 
 上游通过 httptrace 捕获传输层实际写出的请求头，包含自动添加的 Content-Length、Accept-Encoding 或 HTTP/2 伪头，header_source 为 transport。若连接失败、尚未发出请求，则保留 prepared 记录。`.http` 为便于查看的文本展示，不是 HTTP/2 帧或 TLS 抓包。鉴权在读取正文之前执行；鉴权失败不记录正文，并关闭连接以避免等待未发送的正文。已认证的转换失败请求仍保留入站记录。认证头、Cookie 和敏感 query 值为 `[REDACTED]`；正文保持原样。日志目录已加入忽略列表。旧版生成的模型列表日志仍保留，新版不再新增。
 
@@ -507,3 +507,5 @@ go build -o bin/gateway.exe ./cmd/server
 超时配置：`server.read_body_timeout` 默认 30s；`server.write_idle_timeout` 默认 60s，按次写入续期；`server.idle_timeout` 默认 120s。旧 `upstream` 和各 `upstreams.<name>` 的 `response_header_timeout` 默认 60s、`read_idle_timeout` 默认 120s，后者仅计算等待响应体读取的时间，不计算下游背压。时长必须为正。正文读取超时返回 408，上游超时在响应尚未提交时返回 504；已开始的流报协议错误或关闭原生连接，不补成功终态。没有整条 SSE 总时长限制。
 
 `server.max_concurrent_requests` 默认 64，必须为正整数；所有上游共享活跃调用上限，流结束或取消后释放。超限立即返回 503 和 `Retry-After: 1`，不排队、不读取业务正文。本地配置模型查询不占用名额。
+
+升级说明：完整正文日志现在默认关闭，显式 `logging.requests.enabled: true` 继续启用；`max_total_bytes` 默认 1 GiB、`retention` 默认 168h。写入时清理过期和最旧请求组，仅管理网关命名的普通日志文件；不删除其他文件或符号链接。容量不足时跳过日志，不影响业务响应。出站正文仅在发送后或连接失败后记录一次，JSON 以 raw_body 为准，不再有重复的 body 字段。

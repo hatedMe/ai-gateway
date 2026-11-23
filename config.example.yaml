@@ -77,5 +77,7 @@ models:
 
 logging:
   requests:
-    enabled: true # 记录完整请求正文；设为 false 关闭请求文件日志
+    enabled: false # 显式设为 true 才记录完整请求正文
+    max_total_bytes: 1073741824
+    retention: "168h"
     dir: "logs/requests" # 相对路径以配置文件所在目录为基准

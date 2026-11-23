@@ -18,6 +18,9 @@ import (
 )
 
 type Config struct {
+	RequestLogMaxBytes                                                        int64
+	RequestLogRetention                                                       time.Duration
+	logStore                                                                  *requestLogStore
 	MaxConcurrentRequests                                                     int
 	ReadBodyTimeout, WriteIdleTimeout, ResponseHeaderTimeout, ReadIdleTimeout time.Duration
 	Upstreams                                                                 map[string]Upstream
@@ -41,6 +44,13 @@ type handler struct {
 }
 
 func New(config Config) (http.Handler, error) {
+	if config.RequestLogDir != "" && config.logStore == nil {
+		var err error
+		config.logStore, err = newRequestLogStore(config.RequestLogDir, config.RequestLogMaxBytes, config.RequestLogRetention)
+		if err != nil {
+			return nil, fmt.Errorf("request log directory: %w", err)
+		}
+	}
 	if config.MaxConcurrentRequests == 0 {
 		config.MaxConcurrentRequests = 64
 	}
@@ -444,8 +454,8 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	h.logRequest(req, "upstream", body)
-	req = h.traceRequestHeaders(req, body)
+	req, finishLog := h.traceRequestHeaders(req, body)
+	defer finishLog()
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	stop := phaseTimer(h.config.ResponseHeaderTimeout, cancel)

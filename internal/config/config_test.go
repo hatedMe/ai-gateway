@@ -43,7 +43,7 @@ func TestDefaultsAndMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Server.Addr != "127.0.0.1:8176" || c.Server.ReadHeaderTimeout != 10*time.Second || c.Server.ShutdownTimeout != 5*time.Second || c.Upstream.APIKey != "test-secret" || c.Upstream.Model != "muse-spark-1.3-contributor" || c.Upstream.BaseURL != "https://opencode.ai/zen/go/v1" || c.Upstream.ProxyURL != "http://127.0.0.1:7890" || !c.Logging.Requests.Enabled {
+	if c.Server.Addr != "127.0.0.1:8176" || c.Server.ReadHeaderTimeout != 10*time.Second || c.Server.ShutdownTimeout != 5*time.Second || c.Upstream.APIKey != "test-secret" || c.Upstream.Model != "muse-spark-1.3-contributor" || c.Upstream.BaseURL != "https://opencode.ai/zen/go/v1" || c.Upstream.ProxyURL != "http://127.0.0.1:7890" || c.Logging.Requests.Enabled {
 		t.Fatal("incorrect defaults")
 	}
 	if !filepath.IsAbs(c.Logging.Requests.Dir) {
@@ -138,7 +138,7 @@ func TestValidation(t *testing.T) {
 		"server:\n  addr: localhost\n", "server:\n  addr: ':70000'\n", "server:\n  addr: ':abc'\n",
 		"server:\n  shutdown_timeout: '0s'\n", "server:\n  read_header_timeout: '-1s'\n", "server:\n  read_header_timeout: 'secret-value'\n",
 		"upstream:\n  base_url: ftp://example.com\n", "upstream:\n  base_url: https://user:secret-value@example.com\n",
-		"upstream:\n  proxy_url: 'http://user:secret-value@host/path'\n", "logging:\n  requests:\n    dir: ''\n",
+		"upstream:\n  proxy_url: 'http://user:secret-value@host/path'\n", "logging:\n  requests:\n    enabled: true\n    dir: ''\n",
 		"models:\n  aliases: {client: ''}\n", "models:\n  reasoning_efforts: [unknown]\n", "models:\n  model_reasoning_efforts: {test: [unknown]}\n",
 	} {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {

@@ -7,8 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -56,14 +54,6 @@ func (h *handler) logRequestHeaders(r *http.Request, stage string, body []byte, 
 			query[name] = []string{"[REDACTED]"}
 		}
 	}
-	var content any
-	if len(body) > 0 {
-		if json.Valid(body) {
-			content = json.RawMessage(body)
-		} else {
-			content = string(body)
-		}
-	}
 	record := struct {
 		Time         string      `json:"time"`
 		RequestID    string      `json:"request_id"`
@@ -72,23 +62,16 @@ func (h *handler) logRequestHeaders(r *http.Request, stage string, body []byte, 
 		URL          string      `json:"url"`
 		Query        url.Values  `json:"query"`
 		Headers      http.Header `json:"headers"`
-		Body         any         `json:"body"`
 		RawBody      string      `json:"raw_body"`
 		BodyBytes    int         `json:"body_bytes"`
 		HeaderSource string      `json:"header_source"`
 		Upstream     string      `json:"upstream,omitempty"`
 		Protocol     string      `json:"upstream_protocol,omitempty"`
-	}{time.Now().Format(time.RFC3339Nano), id, stage, r.Method, r.URL.Scheme + "://" + r.URL.Host + r.URL.EscapedPath(), query, headers, content, string(body), len(body), source, h.upstreamName, h.protocol}
+	}{time.Now().Format(time.RFC3339Nano), id, stage, r.Method, r.URL.Scheme + "://" + r.URL.Host + r.URL.EscapedPath(), query, headers, string(body), len(body), source, h.upstreamName, h.protocol}
 	if r.URL.Scheme == "" {
 		record.URL = r.URL.EscapedPath()
 	}
 	raw, err := json.MarshalIndent(record, "", "  ")
-	if err == nil {
-		err = os.MkdirAll(h.config.RequestLogDir, 0700)
-	}
-	if err == nil {
-		err = os.WriteFile(filepath.Join(h.config.RequestLogDir, id+"_"+stage+".json"), append(raw, '\n'), 0600)
-	}
 	if err == nil {
 		uri := r.URL.EscapedPath()
 		if uri == "" {
@@ -118,7 +101,7 @@ func (h *handler) logRequestHeaders(r *http.Request, stage string, body []byte, 
 		}
 		request.WriteString("\r\n")
 		request.Write(body)
-		err = os.WriteFile(filepath.Join(h.config.RequestLogDir, id+"_"+stage+".http"), request.Bytes(), 0600)
+		err = h.config.logStore.write(id, map[string][]byte{stage + ".json": append(raw, '\n'), stage + ".http": request.Bytes()})
 	}
 	if err != nil {
 		log.Printf("request log write failed request_id=%s stage=%s: %v", id, stage, err)

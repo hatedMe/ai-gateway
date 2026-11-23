@@ -49,8 +49,10 @@ type Config struct {
 	} `yaml:"models"`
 	Logging struct {
 		Requests struct {
-			Enabled bool   `yaml:"enabled"`
-			Dir     string `yaml:"dir"`
+			MaxTotalBytes int64         `yaml:"max_total_bytes"`
+			Retention     time.Duration `yaml:"retention"`
+			Enabled       bool          `yaml:"enabled"`
+			Dir           string        `yaml:"dir"`
 		} `yaml:"requests"`
 	} `yaml:"logging"`
 }
@@ -72,7 +74,9 @@ func Load(path string, explicit bool) (Config, error) {
 	c.Upstream.BaseURL = "https://opencode.ai/zen/go/v1"
 	c.Upstream.Model = "muse-spark-1.3-contributor"
 	c.Upstream.ProxyURL = "http://127.0.0.1:7890"
-	c.Logging.Requests.Enabled = true
+	c.Logging.Requests.Enabled = false
+	c.Logging.Requests.MaxTotalBytes = 1 << 30
+	c.Logging.Requests.Retention = 7 * 24 * time.Hour
 	c.Logging.Requests.Dir = "logs/requests"
 
 	base := "."
@@ -244,7 +248,7 @@ func checkNode(n *yaml.Node, typ reflect.Type, path string) error {
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
 			return fail("expected a string")
 		}
-	case reflect.Int:
+	case reflect.Int, reflect.Int64:
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!int" {
 			return fail("expected an integer")
 		}
@@ -345,6 +349,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("upstream.proxy_url: expected an HTTP(S) or SOCKS5 proxy URL without path, query or fragment")
 			}
 		}
+	}
+	if c.Logging.Requests.Enabled && (c.Logging.Requests.MaxTotalBytes <= 0 || c.Logging.Requests.Retention <= 0) {
+		return fmt.Errorf("logging.requests: capacity and retention must be positive")
 	}
 	if c.Logging.Requests.Enabled && strings.TrimSpace(c.Logging.Requests.Dir) == "" {
 		return fmt.Errorf("logging.requests.dir: is required when logging is enabled")

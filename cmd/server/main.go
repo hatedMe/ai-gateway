@@ -123,6 +123,7 @@ func newServer(c config.Config) (*http.Server, error) {
 		MaxConcurrentRequests: c.Server.MaxConcurrentRequests,
 		Upstreams:             upstreams,
 		ReadBodyTimeout:       c.Server.ReadBodyTimeout, WriteIdleTimeout: c.Server.WriteIdleTimeout, ResponseHeaderTimeout: c.Upstream.ResponseHeaderTimeout, ReadIdleTimeout: c.Upstream.ReadIdleTimeout,
+		RequestLogMaxBytes: c.Logging.Requests.MaxTotalBytes, RequestLogRetention: c.Logging.Requests.Retention,
 		RequestLogDir: logDir,
 		ProxyURL:      c.Upstream.ProxyURL,
 		BaseURL:       c.Upstream.BaseURL, APIKey: c.Upstream.APIKey, Model: c.Upstream.Model,

@@ -69,6 +69,9 @@ func TestRequestLogIncludesBothBodiesAndRedactedHeaders(t *testing.T) {
 		if record.Headers.Get("Authorization") != "[REDACTED]" {
 			t.Fatal("missing redacted auth")
 		}
+		if err := json.Unmarshal([]byte(record.RawBody), &record.Body); err != nil {
+			t.Fatal(err)
+		}
 		if record.Stage == "inbound" {
 			if record.Body["model"] != "client-model" || record.Headers.Get("X-Debug") != "keep" || record.Query["beta"][0] != "true" {
 				t.Fatal(record)
