@@ -1,6 +1,7 @@
 package main
 
 import (
+	"ai-gateway-go/internal/translate"
 	"context"
 	"errors"
 	"flag"
@@ -97,7 +98,23 @@ func newServer(c config.Config) (*http.Server, error) {
 		for name, u := range c.Upstreams {
 			models := make([]gateway.Model, 0, len(u.Models))
 			for _, m := range u.Models {
-				models = append(models, gateway.Model{Name: m.Name, Model: m.Model})
+				caps := translate.ModelCapabilities{}
+				if m.Compatibility != nil && m.Compatibility.ChatTokenLimitField != nil {
+					caps.ChatTokenLimitField = *m.Compatibility.ChatTokenLimitField
+				}
+				if m.Compatibility != nil {
+					caps.InputModalities = append([]string(nil), m.Compatibility.InputModalities...)
+					if m.Compatibility.JSONSchema != nil {
+						caps.JSONSchema = *m.Compatibility.JSONSchema
+					}
+					if r := m.Compatibility.Reasoning; r != nil {
+						caps.Reasoning = &translate.ReasoningCapabilities{Mode: r.Mode, Efforts: append([]string(nil), r.Efforts...), Budgets: map[string]int{}}
+						for e, b := range r.Budgets {
+							caps.Reasoning.Budgets[e] = b
+						}
+					}
+				}
+				models = append(models, gateway.Model{Name: m.Name, Model: m.Model, Capabilities: caps})
 			}
 			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models}
 		}

@@ -15,6 +15,13 @@ upstreams:
     models:
       - name: "muse-spark-1.3-contributor" # 下游请求使用此公开名，全局唯一
         model: "muse-spark-1.3-contributor" # 此上游的真实模型 ID
+        # 能力声明只控制跨协议转换，不探测服务；仅在目标模型确实支持时取消注释。
+        # compatibility:
+        #   input_modalities: [text, image] # 缺省 [text]；只允许 user 图片 URL/base64，不下载
+        #   json_schema: true # 缺省 false；只映射可严格等价保留的保守 schema 子集
+        #   reasoning:
+        #     mode: effort # Chat/Responses 仅支持 effort
+        #     efforts: [none, low, medium, high] # 显式声明后不支持的级别直接拒绝，不夹取
 
   # chat-main:
   #   protocol: openai-compatible
@@ -24,6 +31,14 @@ upstreams:
   #   models:
   #     - name: coding
   #       model: "your-chat-model"
+  #       compatibility:
+  #         chat_token_limit_field: max_tokens # 仅 Chat；显式设置才重写同协议 token 字段
+  #         # 未设置时跨协议发送 max_completion_tokens，同协议保持原生字段。
+  #         input_modalities: [text, image] # 必含 text，无重复；不支持文件/PDF/音视频/工具媒体
+  #         json_schema: true # 不改写 schema；不支持的格式约束在出站前拒绝
+  #         reasoning:
+  #           mode: effort
+  #           efforts: [none, low, medium, high]
   #     - name: coding-fast
   #       model: "your-fast-model"
 
@@ -35,13 +50,24 @@ upstreams:
   #   models:
   #     - name: reasoning
   #       model: "your-claude-model"
+  #       compatibility:
+  #         input_modalities: [text, image]
+  #         json_schema: true # 转 Anthropic 要求显式 strict:true，strict:false/缺省拒绝
+  #         reasoning:
+  #           mode: budget # Anthropic 仅支持 budget；none 不配置预算
+  #           efforts: [none, low, medium]
+  #           budgets: {low: 1024, medium: 4096} # >=1024，且必须严格小于请求输出 token 上限
 
 auth:
   gateway_api_key: "" # 空字符串表示不验证本地客户端密钥
 
 models:
+  # 以下为旧 Responses 推理回退规则；模型 compatibility.reasoning 显式声明优先。
   reasoning_efforts: [] # 可选：none、minimal、low、medium、high、xhigh
   model_reasoning_efforts: {} # 例如 {your-upstream-model: [low, medium, high]}
+
+# 同协议图片/格式/推理不因缺省 compatibility 被拦截，由目标服务验证。
+# 新跨协议路径拒绝不可迁移的签名、加密推理历史与 previous_response_id。
 
 logging:
   requests:

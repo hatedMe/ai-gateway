@@ -7,9 +7,22 @@ import (
 	"strings"
 )
 
+type ReasoningConfig struct {
+	Mode    string         `yaml:"mode"`
+	Efforts []string       `yaml:"efforts"`
+	Budgets map[string]int `yaml:"budgets"`
+}
+type CompatibilityConfig struct {
+	InputModalities     []string         `yaml:"input_modalities"`
+	JSONSchema          *bool            `yaml:"json_schema"`
+	Reasoning           *ReasoningConfig `yaml:"reasoning"`
+	ChatTokenLimitField *string          `yaml:"chat_token_limit_field"`
+}
+
 type ModelConfig struct {
-	Name  string `yaml:"name"`
-	Model string `yaml:"model"`
+	Compatibility *CompatibilityConfig `yaml:"compatibility"`
+	Name          string               `yaml:"name"`
+	Model         string               `yaml:"model"`
 }
 
 type UpstreamConfig struct {
@@ -94,7 +107,63 @@ func (c Config) validateUpstreams() error {
 			if names[m.Name] {
 				return fmt.Errorf("upstreams[entry].models: duplicate public model name")
 			}
+			if m.Compatibility != nil && m.Compatibility.ChatTokenLimitField != nil {
+				field := *m.Compatibility.ChatTokenLimitField
+				if u.Protocol != "openai-compatible" || (field != "max_tokens" && field != "max_completion_tokens") {
+					return fmt.Errorf("upstreams[entry].models.compatibility.chat_token_limit_field: expected a Chat token field on a Chat upstream")
+				}
+			}
+			if m.Compatibility != nil {
+				if err := m.Compatibility.validate(u.Protocol); err != nil {
+					return err
+				}
+			}
 			names[m.Name] = true
+		}
+	}
+	return nil
+}
+
+func (c CompatibilityConfig) validate(protocol string) error {
+	fail := func() error {
+		return fmt.Errorf("upstreams[entry].models.compatibility: invalid capability declaration")
+	}
+	if c.InputModalities != nil {
+		seen := map[string]bool{}
+		for _, m := range c.InputModalities {
+			if (m != "text" && m != "image") || seen[m] {
+				return fail()
+			}
+			seen[m] = true
+		}
+		if !seen["text"] {
+			return fail()
+		}
+	}
+	if r := c.Reasoning; r != nil {
+		if len(r.Efforts) == 0 || validateEfforts(r.Efforts) != nil {
+			return fail()
+		}
+		if (protocol == "anthropic" && r.Mode != "budget") || (protocol != "anthropic" && r.Mode != "effort") {
+			return fail()
+		}
+		seen := map[string]bool{}
+		for _, e := range r.Efforts {
+			if seen[e] {
+				return fail()
+			}
+			seen[e] = true
+			if r.Mode == "budget" && e != "none" && r.Budgets[e] < 1024 {
+				return fail()
+			}
+		}
+		if r.Mode == "effort" && r.Budgets != nil {
+			return fail()
+		}
+		for effort, budget := range r.Budgets {
+			if effort == "none" || !seen[effort] || budget < 1024 {
+				return fail()
+			}
 		}
 	}
 	return nil

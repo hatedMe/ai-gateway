@@ -48,6 +48,7 @@ type upstreamUsage struct {
 type upstreamResponse struct {
 	ID                string         `json:"id"`
 	Status            string         `json:"status"`
+	StopReason        string         `json:"stop_reason,omitempty"`
 	Model             string         `json:"model"`
 	RequestID         string         `json:"request_id"`
 	Output            []upstreamItem `json:"output"`
@@ -93,6 +94,9 @@ func (r upstreamResponse) messageFor(model string, chat bool) (object, error) {
 		return nil, r.Error
 	}
 	stop := "end_turn"
+	if r.StopReason == "refusal" {
+		stop = "refusal"
+	}
 	switch r.Status {
 	case "completed":
 	case "incomplete":

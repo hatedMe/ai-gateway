@@ -170,6 +170,9 @@ func checkNode(n *yaml.Node, typ reflect.Type, path string) error {
 		}
 		return nil
 	}
+	if typ.Kind() == reflect.Pointer {
+		return checkNode(n, typ.Elem(), path)
+	}
 	switch typ.Kind() {
 	case reflect.Struct, reflect.Map:
 		if n.Kind != yaml.MappingNode {
@@ -219,6 +222,10 @@ func checkNode(n *yaml.Node, typ reflect.Type, path string) error {
 	case reflect.String:
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
 			return fail("expected a string")
+		}
+	case reflect.Int:
+		if n.Kind != yaml.ScalarNode || n.Tag != "!!int" {
+			return fail("expected an integer")
 		}
 	case reflect.Bool:
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!bool" {

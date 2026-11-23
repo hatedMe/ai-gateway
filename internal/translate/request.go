@@ -38,7 +38,7 @@ func only(v map[string]json.RawMessage, keys ...string) error {
 	}
 	for k := range v {
 		if !allowed[k] {
-			return fmt.Errorf("unsupported field %q", k)
+			return &ConversionError{Code: "unsupported_field", Stage: "request", Field: k, Description: "unsupported field"}
 		}
 	}
 	return nil

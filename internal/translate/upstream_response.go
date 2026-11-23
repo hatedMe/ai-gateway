@@ -34,6 +34,12 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("missing upstream message")
 		}
+		if err := validateChatContent(msg, "response"); err != nil {
+			return nil, err
+		}
+		if text, ok := msg["reasoning_content"].(string); ok && text != "" {
+			output = append(output, object{"type": "reasoning", "summary": []object{{"type": "summary_text", "text": text}}})
+		}
 		if s, ok := msg["content"].(string); ok && s != "" {
 			output = append(output, object{"type": "message", "role": "assistant", "content": []object{{"type": "output_text", "text": s}}})
 		}
@@ -55,16 +61,14 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 		}
 		finish, _ = choice["finish_reason"].(string)
 		if u, ok := root["usage"].(map[string]any); ok {
-			if v, ok := u["prompt_tokens"]; ok {
-				usage["input_tokens"] = v
-			}
-			if v, ok := u["completion_tokens"]; ok {
-				usage["output_tokens"] = v
-			}
-			if d, ok := u["prompt_tokens_details"].(map[string]any); ok {
-				usage["input_tokens_details"] = d
+			var state usageMerger
+			var err error
+			usage, err = state.merge(protocol, u)
+			if err != nil {
+				return nil, err
 			}
 		}
+
 	} else if protocol == AnthropicProtocol {
 		blocks, ok := root["content"].([]any)
 		if !ok {
@@ -76,6 +80,12 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 				return nil, fmt.Errorf("invalid content block")
 			}
 			switch b["type"] {
+			case "thinking":
+				text, ok := b["thinking"].(string)
+				if !ok {
+					return nil, &ConversionError{Code: "unsupported_capability", Stage: "response", Field: "content.thinking", Description: "invalid readable reasoning summary"}
+				}
+				output = append(output, object{"type": "reasoning", "summary": []object{{"type": "summary_text", "text": text}}})
 			case "text":
 				output = append(output, object{"type": "message", "role": "assistant", "content": []object{{"type": "output_text", "text": b["text"]}}})
 			case "tool_use":
@@ -90,22 +100,23 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 		}
 		finish, _ = root["stop_reason"].(string)
 		if u, ok := root["usage"].(map[string]any); ok {
-			var parsed chatSourceUsage
-			encoded, _ := json.Marshal(u)
-			if json.Unmarshal(encoded, &parsed) != nil {
-				return nil, fmt.Errorf("invalid token usage")
+			var state usageMerger
+			var err error
+			usage, err = state.merge(protocol, u)
+			if err != nil {
+				return nil, err
 			}
-			usage["input_tokens"] = parsed.Input + parsed.Read + parsed.Created
-			usage["output_tokens"] = parsed.Output
-			usage["cache_read_input_tokens"] = parsed.Read
-			usage["cache_creation_input_tokens"] = parsed.Created
 		}
+
 	} else {
 		return nil, fmt.Errorf("unsupported upstream protocol")
 	}
+	if finish == "refusal" {
+		result["stop_reason"] = "refusal"
+	}
 	switch finish {
-	case "stop", "tool_calls", "end_turn", "stop_sequence", "tool_use":
-	case "length", "max_tokens":
+	case "stop", "tool_calls", "end_turn", "stop_sequence", "tool_use", "refusal":
+	case "length", "max_tokens", "model_context_window_exceeded":
 		result["status"] = "incomplete"
 		result["incomplete_details"] = object{"reason": "max_output_tokens"}
 	case "content_filter":
@@ -113,6 +124,9 @@ func DecodeUpstreamResponse(protocol Protocol, raw []byte) ([]byte, error) {
 		result["incomplete_details"] = object{"reason": "content_filter"}
 	default:
 		return nil, fmt.Errorf("missing or unsupported upstream stop reason")
+	}
+	if err := validateOutputTools(output, "response"); err != nil {
+		return nil, err
 	}
 	result["output"] = output
 	result["usage"] = usage

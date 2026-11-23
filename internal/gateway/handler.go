@@ -28,6 +28,7 @@ type Config struct {
 }
 type handler struct {
 	config                                   Config
+	capabilities                             translate.ModelCapabilities
 	endpoint                                 string
 	client                                   *http.Client
 	routes                                   Router
@@ -143,6 +144,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		selected := *h.upstreams[route.Upstream]
 		selected.config.Model = route.Model
+		selected.capabilities = route.Capabilities
+		conversion := &translate.ConversionContext{Source: translate.Protocol(protocolForPath(r.URL.Path)), Target: translate.Protocol(selected.protocol), ClientModel: request.Model, UpstreamModel: route.Model, Capabilities: route.Capabilities}
+		r = r.WithContext(context.WithValue(r.Context(), conversionContextKey{}, conversion))
 		h = &selected
 		if protocolForPath(r.URL.Path) == h.protocol && !count {
 			r = r.WithContext(context.WithValue(r.Context(), nativeUpstreamKey{}, true))
@@ -162,8 +166,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_request_error", "query parameters are unsupported across upstream protocols")
 			return
 		}
+		var capabilityErr error
+		raw, capabilityErr = translate.PrepareClientCapabilities(raw, conversion)
+		if capabilityErr != nil {
+			h.conversionError(w, r, 400, capabilityErr)
+			return
+		}
 		if err := validateCrossProtocolRequest(raw, h.protocol, protocolForPath(r.URL.Path)); err != nil {
-			writeError(w, 400, "invalid_request_error", err.Error())
+			h.conversionError(w, r, 400, err)
 			return
 		}
 	}
@@ -202,8 +212,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		prepared, err = translate.PrepareRequest(raw, options)
 	}
 	if err != nil {
-		writeError(w, 400, "invalid_request_error", err.Error())
+		h.conversionError(w, r, 400, err)
 		return
+	}
+	if conversion, ok := r.Context().Value(conversionContextKey{}).(*translate.ConversionContext); ok {
+		prepared = conversion.CompletePrepared(prepared)
+	}
+	if conversion, ok := r.Context().Value(conversionContextKey{}).(*translate.ConversionContext); ok && conversion.Source == translate.AnthropicProtocol && conversion.Target == translate.ChatProtocol {
+		prepared.Warnings = append(prepared.Warnings, "readable reasoning summaries map to text without native replay state")
 	}
 	if len(prepared.Warnings) > 0 {
 		warnings := make([]string, len(prepared.Warnings))
@@ -225,9 +241,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.do(r, http.MethodPost, endpoint, body, request.Stream && !count)
 	if err != nil {
+		if resp != nil {
+			copyResponseHeaders(w, resp)
+			resp.Body.Close()
+		}
 		var invalid *requestEncodingError
 		if errors.As(err, &invalid) {
-			writeError(w, 400, "invalid_request_error", invalid.Error())
+			h.conversionError(w, r, 400, invalid)
+			return
+		}
+		var conversion *translate.ConversionError
+		if errors.As(err, &conversion) {
+			h.conversionError(w, r, 502, conversion)
 			return
 		}
 		if r.Context().Err() == nil {
@@ -332,11 +357,22 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 			return nil, &requestEncodingError{fmt.Errorf("query parameters are unsupported across upstream protocols")}
 		}
 		var err error
-		body, err = translate.EncodeUpstreamRequest(translate.Protocol(h.protocol), body)
+		conversion, _ := r.Context().Value(conversionContextKey{}).(*translate.ConversionContext)
+		if conversion == nil {
+			conversion = &translate.ConversionContext{Source: translate.ResponsesProtocol, Target: translate.Protocol(h.protocol), Capabilities: h.capabilities}
+		}
+		body, err = translate.EncodeUpstreamRequestWithContext(body, conversion)
 		if err != nil {
 			return nil, &requestEncodingError{err}
 		}
 		endpoint = h.upstreamEndpoint()
+	}
+	if conversion, ok := r.Context().Value(conversionContextKey{}).(*translate.ConversionContext); ok && !adapt && !native && conversion.Source != conversion.Target {
+		var err error
+		body, err = translate.EncodeUpstreamRequestWithContext(body, conversion)
+		if err != nil {
+			return nil, &requestEncodingError{err}
+		}
 	}
 	req, err := http.NewRequestWithContext(r.Context(), method, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -364,7 +400,15 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 		return resp, err
 	}
 	publicModel, _ := r.Context().Value(responseModelKey{}).(string)
-	return normalizeUpstreamResponse(resp, translate.Protocol(h.protocol), publicModel)
+	conversion, _ := r.Context().Value(conversionContextKey{}).(*translate.ConversionContext)
+	if conversion == nil {
+		conversion = &translate.ConversionContext{Target: translate.Protocol(h.protocol), ClientModel: publicModel}
+	}
+	normalized, err := normalizeUpstreamResponseObserved(resp, conversion, func(err error) { h.logConversionFailure(r, err) })
+	if err != nil {
+		return resp, err
+	}
+	return normalized, nil
 }
 func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 	id := resp.Header.Get("x-request-id")
@@ -415,6 +459,10 @@ func detailedError(w http.ResponseWriter, err error) map[string]any {
 	if errors.As(err, &upstream) {
 		detail := v["error"].(map[string]any)
 		detail["type"] = structuredErrorType(upstream.Type, upstream.Code)
+		if upstream.Stage != "" {
+			detail["stage"] = upstream.Stage
+			detail["field"] = upstream.Field
+		}
 		if upstream.Code != "" {
 			detail["code"] = upstream.Code
 		}

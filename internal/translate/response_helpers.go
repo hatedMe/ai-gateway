@@ -9,6 +9,8 @@ import (
 // UpstreamError preserves the error details reported by the Responses provider.
 type UpstreamError struct {
 	Type      string `json:"type,omitempty"`
+	Stage     string `json:"stage,omitempty"`
+	Field     string `json:"field,omitempty"`
 	Code      string `json:"code,omitempty"`
 	Message   string `json:"message"`
 	Param     string `json:"param,omitempty"`

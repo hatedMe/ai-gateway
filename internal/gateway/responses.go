@@ -32,6 +32,14 @@ func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []b
 		root["model"], _ = json.Marshal(model)
 		raw, _ = json.Marshal(root)
 	}
+	if h.protocol == "openai-compatible" && protocolForPath(r.URL.Path) == h.protocol && h.capabilities.ChatTokenLimitField != "" {
+		var err error
+		raw, err = translate.EncodeUpstreamRequestWithContext(raw, &translate.ConversionContext{Source: translate.ChatProtocol, Target: translate.ChatProtocol, Capabilities: h.capabilities})
+		if err != nil {
+			h.conversionError(w, r, 400, err)
+			return
+		}
+	}
 	if r.URL.Path == "/v1/messages/count_tokens" {
 		delete(root, "stream")
 		raw, _ = json.Marshal(root)
@@ -46,9 +54,18 @@ func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []b
 	}
 	resp, err := h.do(r, http.MethodPost, endpoint, raw, request.Stream)
 	if err != nil {
+		if resp != nil {
+			copyResponseHeaders(w, resp)
+			resp.Body.Close()
+		}
 		var invalid *requestEncodingError
 		if errors.As(err, &invalid) {
-			writeError(w, 400, "invalid_request_error", invalid.Error())
+			h.conversionError(w, r, 400, invalid)
+			return
+		}
+		var conversion *translate.ConversionError
+		if errors.As(err, &conversion) {
+			h.conversionError(w, r, 502, conversion)
 			return
 		}
 		if r.Context().Err() == nil {

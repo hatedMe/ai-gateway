@@ -13,7 +13,7 @@ func TestMultiUpstreamRejectsUnsupportedChatFields(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(500) }))
 	defer server.Close()
-	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "anthropic", BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "anthropic", BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestMultiUpstreamErrors(t *testing.T) {
 				fmt.Fprint(w, "upstream limited")
 			}))
 			defer server.Close()
-			h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+			h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestMultiUpstreamErrors(t *testing.T) {
 func TestAnthropicUnsupportedCounting(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
 	defer server.Close()
-	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "anthropic", BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "anthropic", BaseURL: server.URL, APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

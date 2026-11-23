@@ -41,7 +41,7 @@ func TestEncodeUpstreamAssistantTurn(t *testing.T) {
 		}
 	}
 	_ = json.Unmarshal(encoded, &req)
-	if len(req.Messages) != 3 || req.Messages[0].Role != "assistant" || len(req.Messages[0].ToolCalls) != 2 || req.Messages[0].Content != "also" || req.Messages[1].Role != "tool" {
+	if len(req.Messages) != 5 || req.Messages[0].Role != "assistant" || len(req.Messages[0].ToolCalls) != 1 || req.Messages[1].Content != "also" || len(req.Messages[2].ToolCalls) != 1 || req.Messages[3].Role != "tool" {
 		t.Fatal(string(encoded))
 	}
 }

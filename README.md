@@ -95,11 +95,50 @@ upstreams:
 - 新模式不能同时配置旧 `upstream` 或 `models.aliases`；旧别名迁为上游列表中的 `name/model`。旧 `OPENAI_BASE_URL`、`OPENAI_MODEL`、`OPENAI_PROXY_URL`、`OPENAI_MODEL_ALIASES` 等单上游覆盖变量需要清除。`OPENAI_API_KEY` 只有被 `api_key_env` 显式引用时才可作为新模式密钥来源，不会自动覆盖所有服务。全局监听、鉴权和推理配置变量仍可使用。
 - `/v1/models` 及详情在新模式列出配置的公开 `name`，沿用现有 Anthropic 风格、排序和分页，不联网获取远端模型。配置清单不代表已在线验证模型可用。
 - 计数接口按模型选路：Responses 使用 `/responses/input_tokens`，Anthropic 使用 `/messages/count_tokens`；Chat 上游返回 `501`，不估算、不切换上游。
-- 文字和多轮函数工具调用支持九种入站/上游组合的 JSON/SSE。新增 Chat/Anthropic 出站转换目前支持文字、函数工具、token 限额、采样和工具选择；图片、文件、结构化输出、推理配置/历史签名、缓存和服务端历史引用等未映射内容会在出站前明确拒绝。同协议可保留服务原生能力；已有 Responses 出站转换保留其现有兼容能力。
+- 文字和多轮函数工具调用支持九种入站/上游组合的 JSON/SSE。跨协议图片、JSON Schema 输出和推理控制按选中模型的 `compatibility` 声明启用，具体边界见下节；未映射内容在出站前明确拒绝。同协议保留服务原生能力，不因缺省能力声明拦截原生请求。
 - 同协议原生响应保留真实模型名；跨协议响应使用客户端公开模型名。上游强制 SSE 时可聚合为 JSON；跨协议流中断或工具参数不完整时发送错误，不补造成功终态。Responses 跨协议流提供参数、内容块和输出项的完成事件。请求取消会关闭上游调用。
 - 每个请求只选择一个上游，失败不自动重试或切换。出站请求日志额外记录 `upstream` 和 `upstream_protocol`，认证头继续脱敏。
 
 只有一个 Responses 服务时也可采用示例中的新格式。旧的 `upstream` 格式可继续使用，但其固定模型回退不应用于新模式。
+
+### 模型兼容能力
+
+`compatibility` 配置在每个公开 `name/model` 条目下，只说明部署者声明的能力，不探测服务、不按模型名称推断。不同上游或公开名称即使使用相同真实模型 ID，能力也分别生效。所有字段可省略，旧配置仍可启动。
+
+```yaml
+models:
+  - name: coding
+    model: your-chat-model
+    compatibility:
+      chat_token_limit_field: max_tokens
+      input_modalities: [text, image]
+      json_schema: true
+      reasoning:
+        mode: effort
+        efforts: [none, low, medium, high]
+```
+
+上例为某个 Chat 上游的 `models` 列表片段。配置规则如下：
+
+- `chat_token_limit_field` 仅用于 Chat 上游，可为 `max_tokens` 或 `max_completion_tokens`。跨协议缺省发送 `max_completion_tokens`；同协议 Chat 仅在显式配置此字段时重写 token 字段，其余原生扩展字段保持。客户端同时提供两个限额时，`max_completion_tokens` 优先，出站只保留目标字段。
+- `input_modalities` 缺省为 `[text]`；只能含不重复的 `text`、`image`，且必须包含 `text`。`json_schema` 缺省为 `false`。这两个声明控制跨协议转换；缺省不会限制同协议图片或格式字段的原生透传。
+- Chat/Responses 上游推理使用 `reasoning.mode: effort`；Anthropic 上游只接受 `mode: budget`。`efforts` 为非空、不重复的 `none/minimal/low/medium/high/xhigh` 子集。预算模式须用 `budgets` 为每个已启用且非 `none` 的级别提供至少 1024 的整数预算，例如 `efforts: [none, low, medium]` 与 `budgets: {low: 1024, medium: 4096}`；`none` 禁用推理，不配置预算。
+- 显式模型推理声明优先于旧 `models.model_reasoning_efforts`，再优先于全局集合；显式模式遇到不支持级别直接拒绝，不夹取到相近级别。缺省不开放 Chat/Anthropic 跨协议推理；Responses 目标未声明时保留既有推理规则和兼容警告，详见后文旧路径说明。同协议原生推理不受缺省声明限制。
+
+跨协议高级能力的实际边界：
+
+| 能力 | 支持范围与拒绝条件 |
+|---|---|
+| 图片 | 仅 user 内容中的 HTTP(S) URL 与合法 base64 data URL，媒体类型为 PNG/JPEG/GIF/WebP；Chat `image_url`、Responses `input_image`、Anthropic `image.source` 相互映射。保留多轮、图片单独成轮及文字/多图次序，不下载或解析远端图片。Chat/Responses 的 `detail` 可互转；向 Anthropic 转换时 `high/low` 无等价控制而拒绝。 |
+| 未支持的附件 | 新跨协议路径拒绝 `file_id`、PDF/文档、视频、音频、工具多媒体结果及非法图片。混合内容中任一部分无法转换时整体返回 400，不删附件后发送，也不清空用户轮。 |
+| JSON Schema 输出 | 声明 `json_schema: true` 后映射 Chat `response_format`、Responses `text.format`、Anthropic `output_config.format`。只接受以 object 为根的保守子集：基本类型、properties/required、布尔 additionalProperties、items、anyOf、标量 enum、title/description；嵌套深度最多 64。不支持的关键字/复杂约束直接拒绝。strict 模式要求各对象 `additionalProperties: false` 且全部属性已列入 required；不改写业务 schema、不补 required 或 nullable。向 Anthropic 转换要求显式 `strict: true`，拒绝 `strict: false` 或缺省；不以提示词冒充严格格式，也不自动修复响应 JSON。 |
+| 推理控制 | 显式声明后映射禁用、级别或明确预算；预算必须至少 1024 且严格小于本次请求的输出 token 上限。级别到 Anthropic 使用声明的预算表，显式预算保持精确值；不能把明确预算猜成 Chat/Responses effort。拒绝冲突控制、不支持级别、无对应预算及超限预算。 |
+| 推理摘要 | JSON/SSE 均支持 Chat `reasoning_content` 与 Responses 可读 summary 的映射。Chat 上游向 Anthropic 客户端返回摘要时使用普通文本并通过 `X-Gateway-Warnings` 提示，不生成 Anthropic thinking/signature。摘要仅供阅读，不能恢复隐藏推理。 |
+| 推理历史 | 新跨协议路径拒绝加密推理载体、原生签名、thinking/redacted_thinking、`previous_response_id` 等不可迁移状态，不开放跨服务签名重放。工具参数内同名业务字段不作历史状态处理。 |
+
+不支持的请求在出站前返回 400；转换诊断包含安全的 `code`、`stage`、`field`，不回显完整请求、密钥或工具参数。未知上游内容或不完整流返回 502 或客户端协议的流错误。上述限制适用于新多上游跨协议路径；下文旧单上游 Responses 兼容矩阵的历史文件、工具媒体及推理载体支持不代表新路径也开放这些能力。同协议透传的实际能力由目标服务决定。
+
+Chat/Anthropic 上游的跨协议 SSE 保留文本、拒答、工具及摘要的段落次序，工具身份可晚于参数到达，待身份齐全再发送。累计内容、待发内容及工具身份共用 32 MiB 预算；输出项和待发操作队列各最多 32768 项。需要显式结束标记；正常结束、拒答、过滤、截断和断流分别处理，不补造工具成功结果或成功终态。取消后停止读取与发送。
 
 ### OpenCode 上游
 
@@ -146,7 +185,7 @@ $env:OPENAI_MODEL_REASONING_EFFORTS = '{"your-openai-model":["none","low","mediu
 
 - `POST /v1/messages`：普通与流式消息，接受 `?beta=true`。
 - `POST /v1/chat/completions`：Chat Completions 普通与流式消息，OpenAI SDK 基地址使用 `http://127.0.0.1:8176/v1`。
-- `POST /v1/responses`：原生 Responses 普通与流式请求，仍请求上游 `/responses`。
+- `POST /v1/responses`：Responses 普通与流式请求，按模型选中 Responses、Chat 或 Anthropic 上游。
 - `POST /v1/messages/count_tokens`：按模型调用 Responses 或 Anthropic 的真实计数接口；Chat 上游或上游不支持时返回 501，不使用字符估算。
 - `GET /v1/models`、`GET /v1/models/{id}`：多上游模式列出配置的公开模型名；旧模式配置别名时列出别名，否则转换上游 `/models`。支持 limit/before_id/after_id 本地分页；配置模型创建时间为 epoch，不自动追取源模型列表的额外分页。
 
@@ -166,6 +205,8 @@ OpenAI SDK 使用 `base_url="http://127.0.0.1:8176/v1"`，调用 `client.respons
 
 ## Chat Completions
 
+本节以下参数、扩展载体和省略警告说明主要针对旧单上游 Responses 转换路径；新多上游模式按前述模型能力声明和严格拒绝边界处理。同协议 Chat 原生透传以服务本身为准。
+
 OpenAI SDK 的 `base_url` 设置为 `http://127.0.0.1:8176/v1`，通过 `client.chat.completions.create(...)` 调用；当前未设置本地密钥时，SDK 的 `api_key` 可填写任意非空值。
 
 ```powershell
@@ -182,6 +223,8 @@ python examples/chat_live_smoke.py
 当前 OpenCode 模型实际只接受 tool_choice=auto；none、required 和指定函数虽可转换为 Responses 请求，仍会被此上游拒绝。切换到支持这些选项的上游即可使用。
 
 ## 兼容矩阵
+
+下表保留旧单上游 Responses 转换路径的详细行为；新多上游跨协议能力以“模型兼容能力”一节为准。
 
 | 能力 | 处理方式与边界 |
 |---|---|
@@ -215,6 +258,8 @@ python examples/chat_live_smoke.py
 
 ## Thinking
 
+本节的预算换算、强度夹取和载体往返为旧 Responses 路径兼容行为。新多上游显式 `compatibility.reasoning` 使用前述精确映射和拒绝规则，不换算明确预算、不夹取级别；Responses 目标未声明时仍回退旧规则。同协议原生推理直接由目标服务处理。
+
 参考 `examples/thinking.json`。enabled 预算至少 1024 且小于 max_tokens；≤1024→low、≤8192→medium、≤24576→high、更高→xhigh。adaptive 默认 high；output_config.effort 接受 low/medium/high/xhigh/max，max→xhigh；disabled→none。
 
 配置能力集合时按集合钳制强度；disabled 要求支持 none，否则报错。未配置时交由上游验证，不自动重试其它强度。优先显示摘要，没有摘要时显示可用 reasoning_text，不保证提供隐藏推理。
@@ -231,7 +276,7 @@ signature 的 `openai-reasoning-v1:` 是本网关载体，保存 ID、摘要、�
 
 收到 tool_use 后由客户端执行，将 assistant content 原样加入历史，再提交紧接的 user tool_result；多个调用全部回传，下轮继续提供工具定义。SSE 参数截断时须检查 stop_reason，不能执行不完整 JSON。
 
-请求体上限 16 MiB，普通响应 32 MiB，单 SSE 行/事件 4 MiB；不自动重试可能已执行的请求。
+请求体上限 16 MiB，普通响应 32 MiB，单 SSE 行/事件 4 MiB；新增跨协议 SSE 的累计内容/身份预算及项目/队列限制见“模型兼容能力”。不设置完整 SSE 生命周期总超时，不自动重试可能已执行的请求。
 
 ```powershell
 go test -count=1 ./...

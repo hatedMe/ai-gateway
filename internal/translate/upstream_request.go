@@ -17,6 +17,9 @@ const (
 // EncodeUpstreamRequest encodes the supported, stateless Responses subset.
 // Native requests bypass this function so their provider fields remain intact.
 func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
+	return encodeUpstreamRequest(protocol, raw, ModelCapabilities{})
+}
+func encodeUpstreamRequest(protocol Protocol, raw []byte, caps ModelCapabilities) ([]byte, error) {
 	if protocol == ResponsesProtocol {
 		return raw, nil
 	}
@@ -66,15 +69,6 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 			}
 			out["system"] = prior + text
 		} else {
-			if protocol == ChatProtocol && role == "assistant" && len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
-				last := messages[len(messages)-1]
-				prior, _ := last["content"].(string)
-				if prior != "" {
-					prior += "\n\n"
-				}
-				last["content"] = prior + text
-				return
-			}
 			messages = append(messages, object{"role": role, "content": text})
 		}
 	}
@@ -97,6 +91,7 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 	if len(input) == 0 {
 		return nil, fmt.Errorf("input must not be empty")
 	}
+	pending, seen := map[string]bool{}, map[string]bool{}
 	for _, rawItem := range input {
 		item, err := rawObject(rawItem)
 		if err != nil {
@@ -114,8 +109,33 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 			if role != "user" && role != "assistant" && role != "system" && role != "developer" {
 				return nil, fmt.Errorf("unsupported message role")
 			}
+			if role != "assistant" && len(pending) > 0 {
+				return nil, &ConversionError{Code: "invalid_tool_identity", Stage: "request", Field: "input", Description: "tool results must precede the next user turn"}
+			}
 			if protocol == AnthropicProtocol && (role == "system" || role == "developer") && len(messages) > 0 {
 				return nil, fmt.Errorf("instruction roles within history cannot be moved to Anthropic system")
+			}
+			var parts []map[string]json.RawMessage
+			hasImage := false
+			if json.Unmarshal(item["content"], &parts) == nil {
+				for _, part := range parts {
+					if string(part["type"]) == `"input_image"` {
+						hasImage = true
+					}
+				}
+			}
+			if hasImage {
+				if role != "user" {
+					return nil, &ConversionError{Code: "unsupported_capability", Stage: "request", Field: "input.content", Description: "images require user role"}
+				}
+				converted, e := ConvertInputContent(item["content"], ResponsesProtocol, protocol, caps.allowsImage())
+				if e != nil {
+					return nil, e
+				}
+				var content []object
+				_ = json.Unmarshal(converted, &content)
+				messages = append(messages, object{"role": role, "content": content})
+				continue
 			}
 			s, err := upstreamText(item["content"])
 			if err != nil {
@@ -130,6 +150,11 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 			_ = json.Unmarshal(item["call_id"], &id)
 			_ = json.Unmarshal(item["name"], &name)
 			_ = json.Unmarshal(item["arguments"], &args)
+			if seen[id] {
+				return nil, &ConversionError{Code: "invalid_tool_identity", Stage: "request", Field: "call_id", Description: "duplicate tool call identity"}
+			}
+			seen[id] = true
+			pending[id] = true
 			if id == "" || name == "" {
 				return nil, fmt.Errorf("function call requires call_id and name")
 			}
@@ -139,7 +164,7 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 			}
 			if protocol == ChatProtocol {
 				call := object{"id": id, "type": "function", "function": object{"name": name, "arguments": args}}
-				if len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
+				if len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" && messages[len(messages)-1]["content"] == nil {
 					m := messages[len(messages)-1]
 					calls, _ := m["tool_calls"].([]object)
 					m["tool_calls"] = append(calls, call)
@@ -155,6 +180,10 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 			}
 			var id string
 			_ = json.Unmarshal(item["call_id"], &id)
+			if !pending[id] {
+				return nil, &ConversionError{Code: "invalid_tool_identity", Stage: "request", Field: "call_id", Description: "orphan or duplicate tool result"}
+			}
+			delete(pending, id)
 			if id == "" {
 				return nil, fmt.Errorf("tool result requires call_id")
 			}
@@ -170,6 +199,9 @@ func EncodeUpstreamRequest(protocol Protocol, raw []byte) ([]byte, error) {
 		default:
 			return nil, fmt.Errorf("unsupported cross-protocol input type %q", typ)
 		}
+	}
+	if len(pending) > 0 {
+		return nil, &ConversionError{Code: "invalid_tool_identity", Stage: "request", Field: "input", Description: "missing tool results"}
 	}
 	if protocol == AnthropicProtocol {
 		messages = mergeAnthropicMessages(messages)

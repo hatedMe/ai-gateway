@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"ai-gateway-go/internal/translate"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 type nativeUpstreamKey struct{}
 type responseModelKey struct{}
+type conversionContextKey struct{}
 
 func protocolForPath(path string) string {
 	switch path {
@@ -40,7 +42,7 @@ func validateCrossProtocolRequest(raw []byte, target, source string) error {
 				valid = valid || key == k
 			}
 			if !valid {
-				return fmt.Errorf("field %s is unsupported across these upstream protocols", key)
+				return &translate.ConversionError{Code: "unsupported_field", Stage: "request", Field: key, Description: "unsupported request field"}
 			}
 		}
 		if value, ok := root["store"]; ok && value != false {
@@ -58,14 +60,14 @@ func validateCrossProtocolRequest(raw []byte, target, source string) error {
 					valid = valid || key == "tool_calls" || key == "tool_call_id" || (key == "refusal" && value == nil)
 				}
 				if !valid {
-					return fmt.Errorf("message field %s is unsupported across these upstream protocols", key)
+					return &translate.ConversionError{Code: "unsupported_field", Stage: "request", Field: "messages." + key, Description: "unsupported message field"}
 				}
 			}
 		}
 	}
 	for _, key := range []string{"thinking", "output_config", "reasoning_effort", "reasoning", "include", "cache_control"} {
 		if _, ok := root[key]; ok && target != "openai-responses" {
-			return fmt.Errorf("field %s is unsupported across these upstream protocols", key)
+			return &translate.ConversionError{Code: "unsupported_field", Stage: "request", Field: key, Description: "unsupported request field"}
 		}
 	}
 	var checkContent func(any) error

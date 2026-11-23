@@ -46,7 +46,7 @@ func TestNativeUpstreamProtocols(t *testing.T) {
 					return "2023-06-01"
 				}
 				return ""
-			}(), Models: []Model{{"fast", "real-fast"}, {"slow", "real-slow"}}}}})
+			}(), Models: []Model{{Name: "fast", Model: "real-fast"}, {Name: "slow", Model: "real-slow"}}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func TestMultiUpstreamToolRoundTrip(t *testing.T) {
 						fmt.Fprint(w, toolFixture(target, stream))
 					}))
 					defer server.Close()
-					h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+					h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -228,7 +228,7 @@ func TestMultiUpstreamAuxiliaryAndLogs(t *testing.T) {
 				fmt.Fprint(w, `{"input_tokens":7}`)
 			}))
 			defer server.Close()
-			h, err := New(Config{RequestLogDir: dir, Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL + "/v1", APIKey: "secret-up", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}, {"second", "real-2"}}}}})
+			h, err := New(Config{RequestLogDir: dir, Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL + "/v1", APIKey: "secret-up", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}, {Name: "second", Model: "real-2"}}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +273,7 @@ func TestMultiUpstreamRejectsLossyRequests(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(500) }))
 	defer server.Close()
-	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "openai-compatible", BaseURL: server.URL, APIKey: "secret", Models: []Model{{"public", "real"}}}}})
+	h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: "openai-compatible", BaseURL: server.URL, APIKey: "secret", Models: []Model{{Name: "public", Model: "real"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestMultiUpstreamFlushAndCancel(t *testing.T) {
 				close(canceled)
 			}))
 			defer server.Close()
-			h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+			h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: protocol, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -356,7 +356,7 @@ func TestMultiUpstreamConcurrentRoutes(t *testing.T) {
 		fmt.Fprint(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	h, err := New(Config{Upstreams: map[string]Upstream{"a": {Protocol: "openai-responses", BaseURL: server.URL, APIKey: "key-a", Models: []Model{{"a", "real-a"}}}, "b": {Protocol: "openai-responses", BaseURL: server.URL, APIKey: "key-b", Models: []Model{{"b", "real-b"}}}}})
+	h, err := New(Config{Upstreams: map[string]Upstream{"a": {Protocol: "openai-responses", BaseURL: server.URL, APIKey: "key-a", Models: []Model{{Name: "a", Model: "real-a"}}}, "b": {Protocol: "openai-responses", BaseURL: server.URL, APIKey: "key-b", Models: []Model{{Name: "b", Model: "real-b"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestMultiUpstreamProtocolMatrixJSON(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real-model"}}}}})
+				h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real-model"}}}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -478,7 +478,7 @@ func TestMultiUpstreamProtocolMatrixSSE(t *testing.T) {
 						fmt.Fprint(w, streamForTest(target))
 					}))
 					defer server.Close()
-					h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{"public", "real"}}}}})
+					h, err := New(Config{Upstreams: map[string]Upstream{"svc": {Protocol: target, BaseURL: server.URL + "/v1", APIKey: "secret", AnthropicVersion: "2023-06-01", Models: []Model{{Name: "public", Model: "real"}}}}})
 					if err != nil {
 						t.Fatal(err)
 					}
