@@ -254,6 +254,9 @@ func (s *streamState) start(r upstreamResponse) error {
 	if r.ID == "" {
 		return fmt.Errorf("missing response id")
 	}
+	if !s.budget.reserve(len(r.ID) + len(r.Model)) {
+		return s.budget.err
+	}
 	s.id = r.ID
 	s.started = true
 	model := s.model

@@ -341,3 +341,24 @@ func TestStreamIdentityAndItemResourceLimits(t *testing.T) {
 		}
 	})
 }
+
+func TestGeneratedStreamIDsCountAgainstBudget(t *testing.T) {
+	s := normalizedStream{keys: map[int]int{}, closed: map[int]bool{}, emit: func(string, any) error { return nil }}
+	if err := s.start(strings.Repeat("x", 1<<20), "model"); err != nil {
+		t.Fatal(err)
+	}
+	c := chatSourceState{}
+	for i := 0; i < 34; i++ {
+		kind := "text"
+		if i%2 == 1 {
+			kind = "reasoning"
+		}
+		if err := c.content(&s, "a", kind); err != nil {
+			if !strings.Contains(err.Error(), "limit") {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatal("generated IDs bypassed 32 MiB state budget")
+}

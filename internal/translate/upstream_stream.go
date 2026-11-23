@@ -66,6 +66,11 @@ func (s *normalizedStream) add(key int, item object) (int, error) {
 	}
 	index := len(s.output)
 	responseItemFields(item, s.id, index, "in_progress")
+	identity, _ := item["id"].(string)
+	if len(identity) > (32<<20)-s.bytes {
+		return 0, fmt.Errorf("upstream stream identity limit exceeded")
+	}
+	s.bytes += len(identity)
 	s.keys[key] = index
 	s.output = append(s.output, item)
 	if s.buffers == nil {

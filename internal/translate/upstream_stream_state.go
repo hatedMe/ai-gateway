@@ -66,6 +66,10 @@ func (c *chatSourceState) flush(s *normalizedStream) error {
 				}
 				item = object{"id": fmt.Sprintf("msg_%s_%d", s.id, -op.key), "type": "message", "role": "assistant", "content": []object{part}}
 			}
+			identity, _ := item["id"].(string)
+			if len(identity) > (32<<20)-s.bytes-c.pendingBytes {
+				return fmt.Errorf("upstream stream identity and pending content limit exceeded")
+			}
 			if _, err := s.add(op.key, item); err != nil {
 				return err
 			}
