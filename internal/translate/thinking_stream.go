@@ -9,8 +9,9 @@ import (
 )
 
 type thinkingSummary struct {
-	text string
-	done bool
+	buffer *strings.Builder
+	text   string
+	done   bool
 }
 
 func (st *streamItem) thinkingBlock() *streamBlock {
@@ -72,7 +73,11 @@ func (st *streamItem) updateSummary(index int, value string, delta, done bool) e
 	if !st.budget.reserve(len(suffix)) {
 		return st.budget.err
 	}
-	part.text += suffix
+	if part.buffer == nil {
+		part.buffer = &strings.Builder{}
+	}
+	part.buffer.WriteString(suffix)
+	part.text = part.buffer.String()
 	if done {
 		part.done = true
 	}

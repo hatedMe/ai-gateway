@@ -22,6 +22,7 @@ type streamEvent struct {
 }
 
 type streamBlock struct {
+	buffer        strings.Builder
 	index         int
 	kind          string
 	value         string
@@ -39,13 +40,14 @@ type queuedEvent struct {
 }
 
 type streamItem struct {
-	budget    *streamBudget
-	item      upstreamItem
-	blocks    map[int]*streamBlock
-	queue     []queuedEvent
-	done      bool
-	summaries []thinkingSummary
-	direct    string
+	directBuffer strings.Builder
+	budget       *streamBudget
+	item         upstreamItem
+	blocks       map[int]*streamBlock
+	queue        []queuedEvent
+	done         bool
+	summaries    []thinkingSummary
+	direct       string
 }
 
 type streamState struct {
@@ -215,7 +217,8 @@ func convertStreamFor(r io.Reader, model string, emit func(string, any) error, c
 				if !st.budget.reserve(len(e.Delta)) {
 					return false, st.budget.err
 				}
-				st.direct += e.Delta
+				st.directBuffer.WriteString(e.Delta)
+				st.direct = st.directBuffer.String()
 			} else {
 				if !strings.HasPrefix(e.Text, st.direct) {
 					return false, fmt.Errorf("reasoning text conflict")
@@ -223,7 +226,8 @@ func convertStreamFor(r io.Reader, model string, emit func(string, any) error, c
 				if !st.budget.reserve(len(e.Text) - len(st.direct)) {
 					return false, st.budget.err
 				}
-				st.direct = e.Text
+				st.directBuffer.WriteString(strings.TrimPrefix(e.Text, st.direct))
+				st.direct = st.directBuffer.String()
 			}
 		case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
 			if !s.started {
@@ -329,7 +333,8 @@ func (st *streamItem) appendValue(b *streamBlock, value string) error {
 	if !st.budget.reserve(len(value)) {
 		return st.budget.err
 	}
-	b.value += value
+	b.buffer.WriteString(value)
+	b.value = b.buffer.String()
 	st.queueEvent(queuedEvent{name: "content_block_delta", block: b, delta: value})
 	return nil
 }
