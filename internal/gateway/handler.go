@@ -178,12 +178,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if count {
-		var v map[string]any
+		var v map[string]json.RawMessage
 		if json.Unmarshal(raw, &v) == nil && v != nil {
 			if _, ok := v["max_tokens"]; !ok {
-				v["max_tokens"] = 2147483647
+				v["max_tokens"] = json.RawMessage("2147483647")
 			}
-			v["stream"] = false
+			v["stream"] = json.RawMessage("false")
 			raw, _ = json.Marshal(v)
 		}
 	}
@@ -232,7 +232,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body := prepared.Body
 	if count {
 		endpoint += "/input_tokens"
-		var v map[string]any
+		var v map[string]json.RawMessage
 		_ = json.Unmarshal(body, &v)
 		for _, key := range []string{"max_output_tokens", "stream", "store", "temperature", "top_p", "text", "tool_choice", "parallel_tool_calls", "include", "metadata", "service_tier", "background"} {
 			delete(v, key)
