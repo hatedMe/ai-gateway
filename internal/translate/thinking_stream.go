@@ -16,9 +16,12 @@ type thinkingSummary struct {
 func (st *streamItem) thinkingBlock() *streamBlock {
 	b := st.blocks[0]
 	if b == nil {
+		if !st.reserveBlock() {
+			return &streamBlock{}
+		}
 		b = &streamBlock{index: -1, kind: "thinking", start: object{"type": "thinking", "thinking": ""}}
 		st.blocks[0] = b
-		st.queue = append(st.queue, queuedEvent{name: "content_block_start", block: b})
+		st.queueEvent(queuedEvent{name: "content_block_start", block: b})
 	}
 	return b
 }
@@ -35,6 +38,9 @@ func (st *streamItem) addSummary(index int) error {
 		if err := st.appendValue(b, "\n\n"); err != nil {
 			return err
 		}
+	}
+	if len(st.summaries) >= 32768 {
+		return fmt.Errorf("upstream stream summary limit exceeded")
 	}
 	st.summaries = append(st.summaries, thinkingSummary{})
 	return nil
@@ -62,6 +68,9 @@ func (st *streamItem) updateSummary(index int, value string, delta, done bool) e
 	}
 	if err := st.appendValue(st.thinkingBlock(), suffix); err != nil {
 		return err
+	}
+	if !st.budget.reserve(len(suffix)) {
+		return st.budget.err
 	}
 	part.text += suffix
 	if done {
@@ -143,8 +152,11 @@ func (st *streamItem) finishThinking(item upstreamItem) error {
 	if st.done {
 		return fmt.Errorf("reasoning changed after completion")
 	}
+	if !st.budget.reserve(len(signature)) {
+		return st.budget.err
+	}
 	b.signature = signature
-	st.queue = append(st.queue, queuedEvent{name: "signature_delta", block: b, delta: signature})
+	st.queueEvent(queuedEvent{name: "signature_delta", block: b, delta: signature})
 	st.closeBlock(b)
 	return nil
 }

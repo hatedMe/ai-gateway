@@ -295,3 +295,4 @@ go build -o bin/gateway.exe ./cmd/server
 协议参考：[OpenAI 流式事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)、[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)、[OpenAI 输入计数](https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count)。
 
 
+`Responses` 转换为 Messages/Chat 时，保留状态（正文、工具身份、推理与待发数据）共用 32 MiB 预算，输出项、内容块及待发事件分别最多 32768 个；超限终止转换，不发送成功终态。原生 SSE 透传不累计保存全文。

@@ -39,6 +39,7 @@ type queuedEvent struct {
 }
 
 type streamItem struct {
+	budget    *streamBudget
 	item      upstreamItem
 	blocks    map[int]*streamBlock
 	queue     []queuedEvent
@@ -48,6 +49,7 @@ type streamItem struct {
 }
 
 type streamState struct {
+	budget       streamBudget
 	chat         bool
 	model        string
 	id           string
@@ -188,7 +190,7 @@ func convertStreamFor(r io.Reader, model string, emit func(string, any) error, c
 			b := st.blocks[ci]
 			p := upstreamPart{Text: b.value, Annotations: []object{e.Annotation}}
 			for _, c := range p.citations() {
-				st.queue = append(st.queue, queuedEvent{name: "citations_delta", block: b, citation: c})
+				st.queueEvent(queuedEvent{name: "citations_delta", block: b, citation: c})
 			}
 			if len(p.citations()) > 0 {
 				b.citationsDone = true
@@ -210,10 +212,16 @@ func convertStreamFor(r io.Reader, model string, emit func(string, any) error, c
 				return false, fmt.Errorf("missing reasoning item")
 			}
 			if strings.HasSuffix(e.Type, ".delta") {
+				if !st.budget.reserve(len(e.Delta)) {
+					return false, st.budget.err
+				}
 				st.direct += e.Delta
 			} else {
 				if !strings.HasPrefix(e.Text, st.direct) {
 					return false, fmt.Errorf("reasoning text conflict")
+				}
+				if !st.budget.reserve(len(e.Text) - len(st.direct)) {
+					return false, st.budget.err
 				}
 				st.direct = e.Text
 			}
@@ -259,15 +267,25 @@ func (s *streamState) addItem(index int, item upstreamItem) error {
 	if item.Type != "message" && item.Type != "function_call" && item.Type != "reasoning" && item.Type != "web_search_call" && item.Type != "code_interpreter_call" && item.Type != "file_search_call" {
 		return fmt.Errorf("unsupported streamed output item %q", item.Type)
 	}
-	st := &streamItem{item: item, blocks: map[int]*streamBlock{}}
+	if len(s.items) >= 32768 {
+		return fmt.Errorf("upstream stream output item limit exceeded")
+	}
+	raw, _ := json.Marshal(item)
+	if !s.budget.reserve(len(raw)) {
+		return s.budget.err
+	}
+	st := &streamItem{budget: &s.budget, item: item, blocks: map[int]*streamBlock{}}
 	s.items[index] = st
 	if item.Type == "function_call" {
 		if item.CallID == "" || item.Name == "" {
 			return fmt.Errorf("invalid streamed tool call")
 		}
+		if !st.reserveBlock() {
+			return st.budget.err
+		}
 		b := &streamBlock{index: -1, kind: "tool_use", start: object{"type": "tool_use", "id": item.CallID, "name": item.Name, "input": object{}}}
 		st.blocks[0] = b
-		st.queue = append(st.queue, queuedEvent{name: "content_block_start", block: b})
+		st.queueEvent(queuedEvent{name: "content_block_start", block: b})
 		if item.Arguments != "" {
 			return st.appendValue(b, item.Arguments)
 		}
@@ -292,9 +310,12 @@ func (st *streamItem) addPart(index int, part upstreamPart) (*streamBlock, error
 	if err != nil {
 		return nil, err
 	}
+	if !st.reserveBlock() {
+		return nil, st.budget.err
+	}
 	b := &streamBlock{index: -1, kind: part.Type, start: object{"type": "text", "text": ""}}
 	st.blocks[index] = b
-	st.queue = append(st.queue, queuedEvent{name: "content_block_start", block: b})
+	st.queueEvent(queuedEvent{name: "content_block_start", block: b})
 	return b, st.appendValue(b, value)
 }
 
@@ -305,8 +326,11 @@ func (st *streamItem) appendValue(b *streamBlock, value string) error {
 	if b.closed || st.done {
 		return fmt.Errorf("delta after block closed")
 	}
+	if !st.budget.reserve(len(value)) {
+		return st.budget.err
+	}
 	b.value += value
-	st.queue = append(st.queue, queuedEvent{name: "content_block_delta", block: b, delta: value})
+	st.queueEvent(queuedEvent{name: "content_block_delta", block: b, delta: value})
 	return nil
 }
 
@@ -320,7 +344,7 @@ func (st *streamItem) reconcile(b *streamBlock, value string) error {
 func (st *streamItem) closeBlock(b *streamBlock) {
 	if !b.closed {
 		b.closed = true
-		st.queue = append(st.queue, queuedEvent{name: "content_block_stop", block: b})
+		st.queueEvent(queuedEvent{name: "content_block_stop", block: b})
 	}
 }
 
@@ -406,9 +430,16 @@ func (s *streamState) finishItem(index int, item upstreamItem) error {
 	} else if item.Type == "web_search_call" || item.Type == "code_interpreter_call" || item.Type == "file_search_call" {
 		if !st.done {
 			for ci, block := range item.serverBlocks() {
+				if !st.reserveBlock() {
+					return st.budget.err
+				}
+				encoded, _ := json.Marshal(block)
+				if !st.budget.reserve(len(encoded)) {
+					return st.budget.err
+				}
 				b := &streamBlock{index: -1, kind: "server", start: block}
 				st.blocks[ci] = b
-				st.queue = append(st.queue, queuedEvent{name: "content_block_start", block: b})
+				st.queueEvent(queuedEvent{name: "content_block_start", block: b})
 				st.closeBlock(b)
 			}
 		}
@@ -444,6 +475,9 @@ func (s *streamState) finishItem(index int, item upstreamItem) error {
 }
 
 func (s *streamState) flush() error {
+	if s.budget.err != nil {
+		return s.budget.err
+	}
 	for {
 		st := s.items[s.nextItem]
 		if st == nil {
@@ -483,6 +517,10 @@ func (s *streamState) flush() error {
 				return err
 			}
 		}
+		for _, event := range st.queue {
+			s.budget.queued--
+			s.budget.bytes -= queuedBytes(event)
+		}
 		st.queue = nil
 		if !st.done {
 			return nil
@@ -501,6 +539,6 @@ func (st *streamItem) addCitations(b *streamBlock, p upstreamPart) {
 	}
 	b.citationsDone = true
 	for _, c := range cs {
-		st.queue = append(st.queue, queuedEvent{name: "citations_delta", block: b, citation: c})
+		st.queueEvent(queuedEvent{name: "citations_delta", block: b, citation: c})
 	}
 }
