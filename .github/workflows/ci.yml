@@ -1,0 +1,79 @@
+name: 网关检查
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 检查修改过的 Go 文件格式
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
+            base=HEAD~1
+          fi
+          failed=0
+          while IFS= read -r -d '' file; do
+            # Windows checkout may use CRLF; formatting checks normalized text.
+            if [ -n "$(sed 's/\r$//' "$file" | gofmt -l)" ]; then
+              echo "需要 gofmt: $file"
+              failed=1
+            fi
+          done < <(git diff --name-only --diff-filter=ACMR -z "$base" HEAD -- '*.go')
+          exit "$failed"
+      - run: go test ./... -timeout=120s -coverprofile=coverage.out
+      - run: go vet ./...
+      - run: go build ./...
+      - if: runner.os == 'Linux'
+        run: go test -race ./... -timeout=180s
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 检查结果-${{ matrix.os }}
+          path: |
+            coverage.out
+            internal/translate/testdata/fuzz/
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - run: staticcheck ./...
+      - run: govulncheck ./...
+      - name: 模糊测试
+        shell: bash
+        run: |
+          seconds=10
+          if [ "${{ github.event_name }}" = "schedule" ]; then seconds=120; fi
+          go test ./internal/translate -run '^$' -fuzz '^FuzzSSE$' -fuzztime="${seconds}s" -parallel=2
+          go test ./internal/translate -run '^$' -fuzz '^FuzzRequestConversion$' -fuzztime="${seconds}s" -parallel=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: 模糊测试失败输入
+          path: internal/translate/testdata/fuzz/
