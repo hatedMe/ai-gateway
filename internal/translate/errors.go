@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 )
 
 // ConversionError contains safe diagnostics, never source payloads.
@@ -14,6 +15,9 @@ func (e *ConversionError) Error() string { return e.Stage + ": " + e.Code + ": "
 func conversionError(err error, stage string) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
 	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) {
 		return err

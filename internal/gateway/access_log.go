@@ -27,6 +27,15 @@ func access(r *http.Request) *accessRecord {
 	a, _ := r.Context().Value(accessKey{}).(*accessRecord)
 	return a
 }
+func responseCommitted(r *http.Request) bool {
+	if a := access(r); a != nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.Status != 0
+	}
+	return false
+}
+
 func setOutcome(r *http.Request, reason string) {
 	if a := access(r); a != nil {
 		a.mu.Lock()

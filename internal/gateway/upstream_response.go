@@ -45,6 +45,9 @@ func normalizeUpstreamResponseObserved(resp *http.Response, c *translate.Convers
 					onError(err)
 				}
 				detail := map[string]any{"type": "api_error", "message": "upstream stream conversion failed"}
+				if timeoutStatus(err) == 504 {
+					detail["code"] = "upstream_timeout"
+				}
 				var conversion *translate.ConversionError
 				if errors.As(err, &conversion) {
 					detail["code"], detail["stage"], detail["field"] = conversion.Code, conversion.Stage, conversion.Field

@@ -26,7 +26,7 @@ func (h *handler) models(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp, err := h.do(r, http.MethodGet, strings.TrimSuffix(h.endpoint, "/responses")+"/models", nil, false)
 		if err != nil {
-			writeError(w, 502, "api_error", "upstream connection failed")
+			writeError(w, timeoutStatus(err), "api_error", "upstream connection failed")
 			return
 		}
 		defer resp.Body.Close()
@@ -42,7 +42,7 @@ func (h *handler) models(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&payload); err != nil {
-			writeError(w, 502, "api_error", "upstream returned invalid models")
+			writeError(w, timeoutStatus(err), "api_error", "upstream returned invalid models")
 			return
 		}
 		for _, m := range payload.Data {

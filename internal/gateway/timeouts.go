@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"ai-gateway-go/internal/translate"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,10 @@ import (
 )
 
 func timeoutStatus(err error) int {
+	var upstream *translate.UpstreamError
+	if errors.As(err, &upstream) && upstream.Code == "upstream_timeout" {
+		return 504
+	}
 	var timeout net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
 		return 504

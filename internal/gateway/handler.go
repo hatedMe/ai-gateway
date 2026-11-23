@@ -384,6 +384,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			convertStream = translate.ConvertStreamForChat
 		}
 		if err = convertStream(resp.Body, request.Model, filter.Emit); err != nil && r.Context().Err() == nil {
+			if timeoutStatus(err) == 504 && !responseCommitted(r) {
+				writeError(w, 504, "api_error", "upstream stream timed out")
+				return
+			}
 			setOutcome(r, "stream_error")
 			_ = emit("error", detailedError(w, err))
 		}
@@ -598,7 +602,11 @@ func (h *handler) upstreamError(w http.ResponseWriter, resp *http.Response, coun
 	if status < 400 || status > 599 {
 		status = 502
 	}
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if readErr != nil {
+		writeError(w, timeoutStatus(readErr), "api_error", "could not read upstream error response")
+		return
+	}
 	var v struct {
 		Error struct{ Message, Type, Code, Param string }
 	}
@@ -627,7 +635,7 @@ func (h *handler) tokenCount(w http.ResponseWriter, resp *http.Response) {
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	decoder.UseNumber()
 	if err := decoder.Decode(&v); err != nil || v.InputTokens == nil {
-		writeError(w, 502, "api_error", "upstream returned invalid input_tokens")
+		writeError(w, timeoutStatus(err), "api_error", "upstream returned invalid input_tokens")
 		return
 	}
 	number, ok := v.InputTokens.(json.Number)
