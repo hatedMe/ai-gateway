@@ -353,7 +353,7 @@ func TestProtocolCompatibilityStructuredErrors(t *testing.T) {
 					if stream {
 						wantStatus, stage = 200, "stream"
 					}
-					if w.Code != wantStatus || !strings.Contains(w.Body.String(), `"code":"invalid_usage"`) || !strings.Contains(w.Body.String(), `"stage":"`+stage+`"`) || w.Header().Get("request-id") != "usage-request" {
+					if w.Code != wantStatus || !strings.Contains(w.Body.String(), `"code":"invalid_usage"`) || !strings.Contains(w.Body.String(), `"stage":"`+stage+`"`) || w.Header().Get("x-upstream-request-id") != "usage-request" {
 						t.Errorf("lost conversion diagnostics or upstream request ID: %d %v %s", w.Code, w.Header(), w.Body.String())
 					}
 					if strings.Contains(w.Body.String(), "private-upstream-content") || strings.Contains(w.Body.String(), "upstream-secret") || strings.Contains(w.Body.String(), "[DONE]") || strings.Contains(w.Body.String(), "response.completed") || strings.Contains(w.Body.String(), "message_stop") {

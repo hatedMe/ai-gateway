@@ -509,3 +509,5 @@ go build -o bin/gateway.exe ./cmd/server
 `server.max_concurrent_requests` 默认 64，必须为正整数；所有上游共享活跃调用上限，流结束或取消后释放。超限立即返回 503 和 `Retry-After: 1`，不排队、不读取业务正文。本地配置模型查询不占用名额。
 
 升级说明：完整正文日志现在默认关闭，显式 `logging.requests.enabled: true` 继续启用；`max_total_bytes` 默认 1 GiB、`retention` 默认 168h。写入时清理过期和最旧请求组，仅管理网关命名的普通日志文件；不删除其他文件或符号链接。容量不足时跳过日志，不影响业务响应。出站正文仅在发送后或连接失败后记录一次，JSON 以 raw_body 为准，不再有重复的 body 字段。
+
+请求关联升级：响应头 `request-id` 固定为网关生成的 ID，与正文日志文件名和完成摘要一致；上游 ID 单独放在 `x-upstream-request-id`。网关错误体使用网关 ID，原生上游正文不修改。每个请求通过标准日志输出一条不含正文、密钥和 query 的完成摘要，记录路由、状态、耗时、首字节耗时、响应字节及取消/超时/流失败原因；此摘要独立于完整正文日志开关。

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
@@ -113,6 +114,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := make([]byte, 16)
 	_, _ = rand.Read(id)
 	w.Header().Set("request-id", "req_"+hex.EncodeToString(id))
+	record := &accessRecord{ID: w.Header().Get("request-id"), started: time.Now(), Outcome: "success", FirstByteMS: -1}
+	w = &accessWriter{ResponseWriter: w, record: record}
+	r = r.WithContext(context.WithValue(r.Context(), accessKey{}, record))
+	defer record.finish(r, w)
 	r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, w.Header().Get("request-id")))
 	chat := r.URL.Path == "/v1/chat/completions"
 	native := r.URL.Path == "/v1/responses"
@@ -208,6 +213,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		selected.capabilities = route.Capabilities
 		conversion := &translate.ConversionContext{Source: translate.Protocol(protocolForPath(r.URL.Path)), Target: translate.Protocol(selected.protocol), ClientModel: request.Model, UpstreamModel: route.Model, Capabilities: route.Capabilities}
 		r = r.WithContext(context.WithValue(r.Context(), conversionContextKey{}, conversion))
+		record.mu.Lock()
+		record.Upstream = route.Upstream
+		record.Protocol = selected.protocol
+		record.mu.Unlock()
 		h = &selected
 		if protocolForPath(r.URL.Path) == h.protocol && !count {
 			r = r.WithContext(context.WithValue(r.Context(), nativeUpstreamKey{}, true))
@@ -375,6 +384,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			convertStream = translate.ConvertStreamForChat
 		}
 		if err = convertStream(resp.Body, request.Model, filter.Emit); err != nil && r.Context().Err() == nil {
+			setOutcome(r, "stream_error")
 			_ = emit("error", detailedError(w, err))
 		}
 		return
@@ -459,6 +469,15 @@ func (h *handler) do(r *http.Request, method, endpoint string, body []byte, stre
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	stop := phaseTimer(h.config.ResponseHeaderTimeout, cancel)
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotFirstResponseByte: func() {
+		if a := access(r); a != nil {
+			a.mu.Lock()
+			if a.FirstByteMS < 0 {
+				a.FirstByteMS = time.Since(a.started).Milliseconds()
+			}
+			a.mu.Unlock()
+		}
+	}}))
 	resp, err := h.client.Do(req)
 	if stop() {
 		if resp != nil {
@@ -492,7 +511,7 @@ func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 		id = resp.Header.Get("request-id")
 	}
 	if id != "" {
-		w.Header().Set("request-id", id)
+		w.Header().Set("x-upstream-request-id", id)
 	}
 	if retry := resp.Header.Get("Retry-After"); retry != "" {
 		w.Header().Set("Retry-After", retry)
@@ -546,8 +565,7 @@ func detailedError(w http.ResponseWriter, err error) map[string]any {
 			detail["param"] = upstream.Param
 		}
 		if upstream.RequestID != "" {
-			v["request_id"] = upstream.RequestID
-			w.Header().Set("request-id", upstream.RequestID)
+			w.Header().Set("x-upstream-request-id", upstream.RequestID)
 		}
 	}
 	return v

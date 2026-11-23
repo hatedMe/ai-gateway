@@ -24,6 +24,7 @@ func (h *handler) conversionError(w http.ResponseWriter, r *http.Request, status
 }
 
 func (h *handler) logConversionFailure(r *http.Request, err error) {
+	setOutcome(r, "conversion_error")
 	if r.Context().Err() != nil {
 		return
 	}

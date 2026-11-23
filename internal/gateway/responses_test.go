@@ -102,7 +102,7 @@ func TestNativeResponses(t *testing.T) {
 			r.Header.Set("Authorization", "Bearer local")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
-			if w.Code != test.status || w.Header().Get("request-id") != "native-id" {
+			if w.Code != test.status || w.Header().Get("x-upstream-request-id") != "native-id" {
 				t.Fatal(w.Code, w.Body.String(), w.Header())
 			}
 			expected := terminal

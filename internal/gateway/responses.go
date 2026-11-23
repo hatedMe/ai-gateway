@@ -94,7 +94,9 @@ func (h *handler) nativeResponse(w http.ResponseWriter, r *http.Request, raw []b
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(resp.StatusCode)
 		// Flush each upstream read; preserve event names, payloads, and order.
-		_, _ = io.Copy(flushingWriter{w, http.NewResponseController(w)}, resp.Body)
+		if _, err := io.Copy(flushingWriter{w, http.NewResponseController(w)}, resp.Body); err != nil {
+			setOutcome(r, "stream_error")
+		}
 		return
 	}
 	var body []byte

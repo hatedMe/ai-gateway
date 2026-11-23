@@ -276,7 +276,7 @@ func TestHTTPModelsAndTokenCount(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/messages/count_tokens", strings.NewReader(`{"model":"alias","messages":[{"role":"user","content":"hi"}]}`)))
-	if w.Code != 200 || obj(t, w.Body.Bytes())["input_tokens"] != float64(0) || w.Header().Get("request-id") != "up-id" {
+	if w.Code != 200 || obj(t, w.Body.Bytes())["input_tokens"] != float64(0) || w.Header().Get("x-upstream-request-id") != "up-id" {
 		t.Fatal(w.Code, w.Body.String(), w.Header())
 	}
 }
@@ -288,7 +288,7 @@ func TestHTTPNonStreamSSEAndErrorDetails(t *testing.T) {
 		fmt.Fprint(w, "data: "+`{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}`+"\n\n")
 	})
 	w := call(h, `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "ok") || w.Header().Get("request-id") != "sse-id" {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "ok") || w.Header().Get("x-upstream-request-id") != "sse-id" {
 		t.Fatal(w.Code, w.Body.String(), w.Header())
 	}
 }
@@ -310,11 +310,11 @@ func TestHTTPAuxiliaryErrorsAndModels(t *testing.T) {
 			if status == 429 {
 				want = 429
 			}
-			if w.Code != want || w.Header().Get("request-id") != "rid" || w.Header().Get("Retry-After") != "2" {
+			if w.Code != want || w.Header().Get("x-upstream-request-id") != "rid" || w.Header().Get("Retry-After") != "2" {
 				t.Fatal(w.Code, w.Body.String(), w.Header())
 			}
 			v := obj(t, w.Body.Bytes())
-			if v["request_id"] != "rid" {
+			if v["request_id"] != w.Header().Get("request-id") {
 				t.Fatal(v)
 			}
 			if status == 429 && v["error"].(map[string]any)["code"] != "limit" {
@@ -392,7 +392,7 @@ func TestHTTPFailedStreamErrorDetails(t *testing.T) {
 	})
 	for _, stream := range []bool{false, true} {
 		w := call(h, fmt.Sprintf(`{"model":"m","max_tokens":64,"stream":%t,"messages":[{"role":"user","content":"hi"}]}`, stream))
-		if !strings.Contains(w.Body.String(), `"type":"rate_limit_error"`) || !strings.Contains(w.Body.String(), `"param":"model"`) || !strings.Contains(w.Body.String(), `"request_id":"failed-id"`) {
+		if !strings.Contains(w.Body.String(), `"type":"rate_limit_error"`) || !strings.Contains(w.Body.String(), `"param":"model"`) || !strings.Contains(w.Body.String(), `"request_id":"`+w.Header().Get("request-id")+`"`) {
 			t.Fatal(stream, w.Code, w.Body.String())
 		}
 	}
