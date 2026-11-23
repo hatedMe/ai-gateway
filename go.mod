@@ -1,5 +1,5 @@
 module ai-gateway-go
 
-go 1.26.0
+go 1.26.11
 
 require go.yaml.in/yaml/v4 v4.0.0
