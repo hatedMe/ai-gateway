@@ -1,0 +1,11 @@
+{
+  "model": "muse-spark-1.3-contributor",
+  "max_completion_tokens": 2048,
+  "reasoning_effort": "high",
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "messages": [
+    {"role": "system", "content": "请用中文简短回答编程问题。"},
+    {"role": "user", "content": "写一个 Python add(a, b) 函数。"}
+  ]
+}

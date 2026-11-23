@@ -1,0 +1,15 @@
+{
+  "model": "claude-alias",
+  "max_tokens": 8192,
+  "stream": true,
+  "thinking": {
+    "type": "enabled",
+    "budget_tokens": 4096
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "三个连续整数的平方和等于 365，求这三个整数。"
+    }
+  ]
+}

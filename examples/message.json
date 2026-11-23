@@ -1,0 +1,28 @@
+{
+  "model": "claude-alias",
+  "max_tokens": 1024,
+  "stream": false,
+  "system": "请使用中文回答。需要天气信息时调用工具。",
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "查询城市天气",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "城市名称"
+          }
+        },
+        "required": ["city"]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "上海天气如何？"
+    }
+  ]
+}
