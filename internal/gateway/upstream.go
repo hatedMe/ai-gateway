@@ -179,7 +179,7 @@ func newMultiUpstream(config Config) (*handler, error) {
 			if strings.TrimSpace(m.Name) == "" || strings.TrimSpace(m.Model) == "" {
 				return nil, fmt.Errorf("model name and model must not be empty")
 			}
-			parent.config.ModelAliases[m.Name] = m.Model
+			parent.config.ModelAliases[m.Name] = m.Name
 		}
 	}
 	return parent, nil
