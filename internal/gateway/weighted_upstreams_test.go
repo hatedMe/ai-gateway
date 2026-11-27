@@ -17,6 +17,7 @@ func TestWeightedAliasHTTPRoutes(t *testing.T) {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%t", source, stream), func(t *testing.T) {
 				counts := map[string]int{}
+				selected := []string{}
 				serve := func(key string) http.HandlerFunc {
 					return func(w http.ResponseWriter, r *http.Request) {
 						var body struct{ Model string }
@@ -25,6 +26,7 @@ func TestWeightedAliasHTTPRoutes(t *testing.T) {
 							t.Error("candidate transport mixed")
 						}
 						counts[key+"/"+body.Model]++
+						selected = append(selected, key+"/"+body.Model)
 						if stream {
 							w.Header().Set("Content-Type", "text/event-stream")
 							fmt.Fprint(w, streamForTest("openai-compatible"))
@@ -55,13 +57,17 @@ func TestWeightedAliasHTTPRoutes(t *testing.T) {
 						}
 					}
 				}
-				for i := 0; i < 6; i++ {
+				sequence := []string{"a/real-a", "b/real-a", "a/real-a", "a/real-b", "b/real-a", "a/real-a"}
+				for i, want := range sequence {
 					w := compatibilitySend(t, h, source, compatibilityRequest(source, stream, []string{"lookup"}))
 					if w.Code != 200 || !strings.Contains(w.Body.String(), "hello") || strings.Contains(w.Body.String(), `"type":"error"`) {
 						t.Fatal(w.Code, w.Body.String())
 					}
 					if source != "openai-compatible" && !strings.Contains(w.Body.String(), `"model":"public"`) {
 						t.Fatal("alias not restored")
+					}
+					if len(selected) != i+1 || selected[i] != want {
+						t.Fatalf("request %d: got %v, want candidate %s", i, selected, want)
 					}
 				}
 				if !reflect.DeepEqual(counts, map[string]int{"a/real-a": 3, "a/real-b": 1, "b/real-a": 2}) {
@@ -114,14 +120,18 @@ func TestWeightedAliasCountTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, status := range []int{200, 501, 200} {
+	for i, status := range []int{200, 200, 200, 200, 501, 200} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/messages/count_tokens", strings.NewReader(`{"model":"public","messages":[{"role":"user","content":"hi"}]}`)))
+		path := "/v1/messages/count_tokens"
+		if i == 1 {
+			path = "/v1/chat/completions"
+		}
+		h.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(`{"model":"public","messages":[{"role":"user","content":"hi"}]}`)))
 		if w.Code != status {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	if !reflect.DeepEqual(calls, []string{"/v1/responses/input_tokens", "/v1/messages/count_tokens"}) {
+	if !reflect.DeepEqual(calls, []string{"/v1/responses/input_tokens", "/v1/chat/completions", "/v1/messages/count_tokens", "/v1/responses/input_tokens", "/v1/messages/count_tokens"}) {
 		t.Fatal(calls)
 	}
 }
