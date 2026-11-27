@@ -98,6 +98,10 @@ func newServer(c config.Config) (*http.Server, error) {
 		for name, u := range c.Upstreams {
 			models := make([]gateway.Model, 0, len(u.Models))
 			for _, m := range u.Models {
+				resolved, err := m.Resolve()
+				if err != nil {
+					return nil, err
+				}
 				caps := translate.ModelCapabilities{}
 				if m.Compatibility != nil && m.Compatibility.ChatTokenLimitField != nil {
 					caps.ChatTokenLimitField = *m.Compatibility.ChatTokenLimitField
@@ -114,7 +118,7 @@ func newServer(c config.Config) (*http.Server, error) {
 						}
 					}
 				}
-				models = append(models, gateway.Model{Name: m.Name, Model: m.Model, Capabilities: caps})
+				models = append(models, gateway.Model{Name: resolved.Name, Model: resolved.Model, Capabilities: caps})
 			}
 			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models, ResponseHeaderTimeout: u.ResponseHeaderTimeout, ReadIdleTimeout: u.ReadIdleTimeout}
 		}

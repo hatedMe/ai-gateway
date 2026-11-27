@@ -21,9 +21,45 @@ type CompatibilityConfig struct {
 }
 
 type ModelConfig struct {
+	Alias         string               `yaml:"alias"`
+	Weight        *int                 `yaml:"weight"`
 	Compatibility *CompatibilityConfig `yaml:"compatibility"`
 	Name          string               `yaml:"name"`
 	Model         string               `yaml:"model"`
+}
+
+type ResolvedModel struct {
+	Name, Model   string
+	Weight        int64
+	Compatibility *CompatibilityConfig
+}
+
+func (m ModelConfig) Resolve() (ResolvedModel, error) {
+	result := ResolvedModel{Name: m.Name, Model: m.Model, Weight: 1, Compatibility: m.Compatibility}
+	if strings.TrimSpace(m.Name) == "" {
+		return ResolvedModel{}, fmt.Errorf("models.name: must not be empty")
+	}
+	if m.Model != "" {
+		if m.Alias != "" || strings.TrimSpace(m.Model) == "" {
+			return ResolvedModel{}, fmt.Errorf("models: model and alias cannot be combined")
+		}
+	} else {
+		result.Model = m.Name
+		result.Name = m.Alias
+		if result.Name == "" {
+			result.Name = m.Name
+		}
+	}
+	if strings.TrimSpace(result.Name) == "" {
+		return ResolvedModel{}, fmt.Errorf("models.alias: must not be empty")
+	}
+	if m.Weight != nil {
+		result.Weight = int64(*m.Weight)
+	}
+	if result.Weight < 1 || result.Weight > 1000000 {
+		return ResolvedModel{}, fmt.Errorf("models.weight: expected integer between 1 and 1000000")
+	}
+	return result, nil
 }
 
 type UpstreamConfig struct {
@@ -104,10 +140,14 @@ func (c Config) validateUpstreams() error {
 			return fmt.Errorf("upstreams[entry].models: at least one model is required")
 		}
 		for _, m := range u.Models {
-			if strings.TrimSpace(m.Name) == "" || strings.TrimSpace(m.Model) == "" {
-				return fmt.Errorf("upstreams[entry].models: name and model must not be empty")
+			resolved, err := m.Resolve()
+			if err != nil {
+				return err
 			}
-			if names[m.Name] {
+			if resolved.Weight != 1 {
+				return fmt.Errorf("weighted routing is not yet supported")
+			}
+			if names[resolved.Name] {
 				return fmt.Errorf("upstreams[entry].models: duplicate public model name")
 			}
 			if m.Compatibility != nil && m.Compatibility.ChatTokenLimitField != nil {
@@ -121,7 +161,7 @@ func (c Config) validateUpstreams() error {
 					return err
 				}
 			}
-			names[m.Name] = true
+			names[resolved.Name] = true
 		}
 	}
 	return nil

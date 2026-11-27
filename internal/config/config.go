@@ -155,6 +155,33 @@ func decodeYAML(raw []byte, c *Config) error {
 					hasKey = hasKey || entry.Content[k].Value == "api_key"
 					hasEnv = hasEnv || entry.Content[k].Value == "api_key_env"
 				}
+
+				for k := 0; k < len(entry.Content); k += 2 {
+					if entry.Content[k].Value != "models" {
+						continue
+					}
+					for _, model := range entry.Content[k+1].Content {
+						hasModel, hasAlias := false, false
+						for j := 0; j < len(model.Content); j += 2 {
+							key, value := model.Content[j], model.Content[j+1]
+							if key.Value == "model" {
+								hasModel = true
+								if strings.TrimSpace(value.Value) == "" {
+									return fmt.Errorf("models.model: must not be empty")
+								}
+							}
+							if key.Value == "alias" {
+								hasAlias = true
+								if strings.TrimSpace(value.Value) == "" {
+									return fmt.Errorf("models.alias: must not be empty")
+								}
+							}
+						}
+						if hasModel && hasAlias {
+							return fmt.Errorf("models: model and alias are mutually exclusive")
+						}
+					}
+				}
 				if hasKey && hasEnv {
 					return fmt.Errorf("upstreams[entry]: api_key and api_key_env are mutually exclusive")
 				}
