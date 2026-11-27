@@ -36,7 +36,7 @@ flowchart LR
 
 例如，请求从 `/v1/responses` 进入，`model` 填 `coding`；配置中 `coding` 属于 `chat-main`、真实模型为 `your-chat-model`，网关就请求该服务的 `/chat/completions`，然后返回 Responses 格式。**入口协议不决定上游，公开模型名决定选路。**
 
-`models[].name` 必须全局唯一；客户端填写这个名称。`models[].model` 是发送给上游的真实 ID。找不到公开模型名返回 `400/model_not_found`，不会猜测或改投其他上游。
+推荐使用 `models[].name` 填上游真实 ID、`alias` 填客户端公开名、`weight` 填候选请求份额。旧 `name`（公开名）/`model`（真实 ID）格式仍兼容。找不到公开模型名返回 `400/model_not_found`，不会猜测或改投其他上游。
 
 ## 快速开始
 
@@ -284,10 +284,10 @@ upstreams:
 | `openai-compatible` | `/chat/completions` | Bearer 密钥 |
 | `anthropic` | `/messages` | `x-api-key` 和配置的 `anthropic-version` |
 
-- `models` 必须是非空列表，每项 `name`、`model` 必填；`name` 在所有上游间唯一，重复时启动失败。未知公开名称返回 `400`、`model_not_found`，不会访问任何上游，也不会自动按真实 ID 匹配。
+- `models` 必须是非空列表，推荐每项使用 `name/alias/weight`：name 为真实 ID，alias 缺省使用 name，weight 缺省 1。相同 alias 可组成加权候选池；同一服务中相同公开名和真实 ID 的条目重复时启动失败。未知公开名称返回 `400`、`model_not_found`，不会访问任何上游，也不会自动按真实 ID 匹配。
 - 每个上游独立设置地址、密钥、代理。`api_key` 与 `api_key_env` 二选一，后者引用的环境变量缺失或为空时启动失败。`anthropic_version` 仅用于 Anthropic，且必须显式填写。基地址须包含服务实际 API 前缀，不含最终资源路径。
 - 新模式不能同时配置旧 `upstream` 或 `models.aliases`；旧别名迁为上游列表中的 `name/model`。旧 `OPENAI_BASE_URL`、`OPENAI_MODEL`、`OPENAI_PROXY_URL`、`OPENAI_MODEL_ALIASES` 等单上游覆盖变量需要清除。`OPENAI_API_KEY` 只有被 `api_key_env` 显式引用时才可作为新模式密钥来源，不会自动覆盖所有服务。全局监听、鉴权和推理配置变量仍可使用。
-- `/v1/models` 及详情在新模式列出配置的公开 `name`，沿用现有 Anthropic 风格、排序和分页，不联网获取远端模型。配置清单不代表已在线验证模型可用。
+- `/v1/models` 及详情在新模式列出配置的公开名称（新格式 alias、旧格式 name），沿用现有 Anthropic 风格、排序和分页，不联网获取远端模型。配置清单不代表已在线验证模型可用。
 - 计数接口按模型选路：Responses 使用 `/responses/input_tokens`，Anthropic 使用 `/messages/count_tokens`；Chat 上游返回 `501`，不估算、不切换上游。
 - 文字和多轮函数工具调用支持九种入站/上游组合的 JSON/SSE。跨协议图片、JSON Schema 输出和推理控制按选中模型的 `compatibility` 声明启用，具体边界见下节；未映射内容在出站前明确拒绝。同协议保留服务原生能力，不因缺省能力声明拦截原生请求。
 - 同协议原生响应保留真实模型名；跨协议响应使用客户端公开模型名。上游强制 SSE 时可聚合为 JSON；跨协议流中断或工具参数不完整时发送错误，不补造成功终态。Responses 跨协议流提供参数、内容块和输出项的完成事件。请求取消会关闭上游调用。
@@ -297,7 +297,7 @@ upstreams:
 
 ### 模型兼容能力
 
-`compatibility` 配置在每个公开 `name/model` 条目下，只说明部署者声明的能力，不探测服务、不按模型名称推断。不同上游或公开名称即使使用相同真实模型 ID，能力也分别生效。所有字段可省略，旧配置仍可启动。
+`compatibility` 配置在每个模型候选条目下，只说明部署者声明的能力，不探测服务、不按模型名称推断。不同上游或公开名称即使使用相同真实模型 ID，能力也分别生效。所有字段可省略，旧配置仍可启动。
 
 ```yaml
 models:
@@ -382,7 +382,7 @@ $env:OPENAI_MODEL_REASONING_EFFORTS = '{"your-openai-model":["none","low","mediu
 | `unexpected positional arguments` | Air 配置用 `air -c .\.air.toml`，不要使用 `air .\.air.toml`；网关配置使用 `--config`。 |
 | `upstream.api_key ... is required` | 检查 `config.yaml` 是否存在，以及上游 `api_key` 是否已填写；缺少默认配置时会进入旧单上游模式。 |
 | `api_key_env ... must be nonempty` | 直接保存密钥时把字段改为 `api_key`；`api_key_env` 只用于引用进程环境变量。 |
-| `400/model_not_found` | 请求中的 `model` 必须匹配全局唯一的公开 `models[].name`，不一定等于真实模型 ID。 |
+| `400/model_not_found` | 请求中的 `model` 必须匹配公开名称（新格式 alias、旧格式 name），不一定等于真实模型 ID。 |
 | `401` | 区分本地网关鉴权和上游鉴权；客户端使用 `auth.gateway_api_key`，网关使用所选上游的 `api_key`。 |
 | `400/unsupported_field` 或 `unsupported_capability` | 检查模型能力声明及转换错误的 `stage`、`field`；同协议原生能力与跨协议能力范围不同。 |
 | Chat 上游提示不认识 token 字段 | 按目标模型要求配置 `compatibility.chat_token_limit_field`，不要根据模型名猜测。 |
@@ -517,3 +517,27 @@ go build -o bin/gateway.exe ./cmd/server
 本地命令：`go test ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`；Linux 使用 `GOARCH=amd64 CGO_ENABLED=1 go test -race ./...`。模糊测试分别运行 `go test ./internal/translate -run '^$' -fuzz '^FuzzSSE$' -fuzztime=10s -parallel=2` 与同参数的 `FuzzRequestConversion`。所有基础测试使用本地模拟上游，不需要真实密钥。
 Chat 上游可读推理兼容 `reasoning_content`、`reasoning` 以及 `reasoning_details` 中的 `reasoning.text`。同一分片的重复文本只输出一次，冲突文本、非文本详情、签名和加密详情仍拒绝跨协议转换。
 Chat 流的 usage 尾帧可重复同一 finish_reason，并携带 assistant 角色及空内容；它只更新统计，不生成重复终态。仍需显式 [DONE]，结束原因冲突、无 usage 的重复结束帧或结束后追加内容仍报错。
+
+## 加权模型别名
+
+推荐配置：
+
+```yaml
+models:
+  - name: real-model-a
+    alias: coding
+    weight: 3
+  - name: real-model-b
+    alias: coding
+    weight: 1
+```
+
+下游传 `model: coding`，按 3:1 平滑加权轮询。相同别名可以跨 upstreams 服务形成候选池：第三个服务给 coding 配置 weight: 2 后，完整六次选择中三个候选分别获得 3、1、2 次。权重表示请求选择次数，不表示 token、耗时或成功次数。
+
+- name 是真实 ID；alias 省略时用 name，显式空值拒绝。weight 省略为 1，只接受 1～1000000 的整数。
+- 旧 `name: coding, model: real-model-a` 等价于新 `name: real-model-a, alias: coding`；两种格式可分条共存，weight 都可使用。同条同时出现 model 和 alias 一律拒绝，空 model/alias、null 和错误类型也拒绝。
+- 同一服务下完全重复的“公开别名＋真实 ID”拒绝，通过 weight 明确增权。不同服务可声明相同真实 ID；不同别名可指向相同真实 ID，调度状态各自独立。
+- 名称大小写敏感。真实 ID 不自动成为公开名称；模型列表和详情按公开名去重，查询目录不消耗轮询份额。
+- 三种消息 POST 和 token 计数共用别名份额，每次最多选一个候选。计数选到 Chat 返回 501；失败、取消或能力校验返回 400 也不退还份额，不自动重试、改投或按请求能力筛选。
+- 每个候选使用自己的地址、密钥、协议、代理、超时及 compatibility；请为池配置符合调用需求的候选。原生响应保留服务 model，跨协议响应保留公开 model。
+- 配置修改需重启；网关不重写实际 config.yaml。旧单 upstream、顶层 models.aliases 和环境变量配置继续兼容。
