@@ -118,7 +118,7 @@ func newServer(c config.Config) (*http.Server, error) {
 						}
 					}
 				}
-				models = append(models, gateway.Model{Name: resolved.Name, Model: resolved.Model, Capabilities: caps})
+				models = append(models, gateway.Model{Name: resolved.Name, Model: resolved.Model, Weight: resolved.Weight, Capabilities: caps})
 			}
 			upstreams[name] = gateway.Upstream{Protocol: u.Protocol, BaseURL: u.BaseURL, APIKey: u.APIKey, ProxyURL: u.ProxyURL, AnthropicVersion: u.AnthropicVersion, Models: models, ResponseHeaderTimeout: u.ResponseHeaderTimeout, ReadIdleTimeout: u.ReadIdleTimeout}
 		}

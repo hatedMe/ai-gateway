@@ -102,8 +102,8 @@ func (c Config) validateUpstreams() error {
 	if len(c.Upstreams) == 0 {
 		return fmt.Errorf("upstreams: at least one upstream is required")
 	}
-	names := map[string]bool{}
 	for name, u := range c.Upstreams {
+		names := map[[2]string]bool{}
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("upstreams: names must not be empty")
 		}
@@ -144,11 +144,8 @@ func (c Config) validateUpstreams() error {
 			if err != nil {
 				return err
 			}
-			if resolved.Weight != 1 {
-				return fmt.Errorf("weighted routing is not yet supported")
-			}
-			if names[resolved.Name] {
-				return fmt.Errorf("upstreams[entry].models: duplicate public model name")
+			if names[[2]string{resolved.Name, resolved.Model}] {
+				return fmt.Errorf("upstreams[entry].models: duplicate model candidate")
 			}
 			if m.Compatibility != nil && m.Compatibility.ChatTokenLimitField != nil {
 				field := *m.Compatibility.ChatTokenLimitField
@@ -161,7 +158,7 @@ func (c Config) validateUpstreams() error {
 					return err
 				}
 			}
-			names[resolved.Name] = true
+			names[[2]string{resolved.Name, resolved.Model}] = true
 		}
 	}
 	return nil

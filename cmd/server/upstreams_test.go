@@ -73,7 +73,7 @@ logging:
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid := saveConfig(t, strings.ReplaceAll(string(raw), "name: fast", "name: code"))
+	invalid := saveConfig(t, strings.ReplaceAll(strings.ReplaceAll(string(raw), "name: fast", "name: code"), "model: real-fast", "model: real-code"))
 	if err := run([]string{"--config", invalid, "--check-config"}); err == nil {
 		t.Fatal("accepted duplicate public model")
 	}

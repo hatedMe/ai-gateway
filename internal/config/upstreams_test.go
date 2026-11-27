@@ -43,7 +43,7 @@ func TestMultiUpstreamConfigValidation(t *testing.T) {
 	cases := []string{
 		"upstreams: {}\n",
 		strings.ReplaceAll(multiConfig, "openai-compatible", "unknown"),
-		strings.ReplaceAll(multiConfig, "name: fast", "name: coding"),
+		strings.ReplaceAll(strings.ReplaceAll(multiConfig, "name: fast", "name: coding"), "model: real-fast", "model: real-code"),
 		strings.ReplaceAll(multiConfig, "model: real-fast", "model: ''"),
 		strings.ReplaceAll(multiConfig, "- name: fast", "- name: 123"),
 		strings.ReplaceAll(multiConfig, "models:\n      - name: coding\n        model: real-code\n      - name: fast\n        model: real-fast", "models: {}"),
@@ -52,7 +52,7 @@ func TestMultiUpstreamConfigValidation(t *testing.T) {
 		strings.ReplaceAll(multiConfig, "base_url: https://example.invalid/v1", "base_url: https://example.invalid/v1/chat/completions"),
 		strings.ReplaceAll(multiConfig, "openai-compatible", "anthropic"),
 		strings.ReplaceAll(multiConfig, "api_key_env: TEST_UPSTREAM_KEY", "api_key: ''\n    api_key_env: TEST_UPSTREAM_KEY"),
-		multiConfig + strings.ReplaceAll(strings.ReplaceAll(multiConfig, "upstreams:\n", ""), "service:", "other:"),
+		strings.ReplaceAll(multiConfig, "model: real-fast", "model: real-code\n      - name: coding\n        model: real-code"),
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {

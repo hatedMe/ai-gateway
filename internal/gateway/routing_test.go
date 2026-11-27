@@ -38,7 +38,7 @@ func TestResolveModelRoute(t *testing.T) {
 			t.Fatal("accepted", name)
 		}
 	}
-	upstreams["b"] = Upstream{Models: []Model{{Name: "code", Model: "real"}}}
+	upstreams["b"] = Upstream{Models: []Model{{Name: "code", Model: "real"}, {Name: "code", Model: "real"}}}
 	if _, err := newRouter(upstreams); err == nil {
 		t.Fatal("accepted duplicate name")
 	}
